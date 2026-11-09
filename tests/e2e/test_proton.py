@@ -696,13 +696,14 @@ def vkd3d_has_present_timing(proton_dir):
 
 
 def find_proton_d3d12():
-    """PML_PROTON_D3D12, else proton-wineland (the user's Proton), else the newest Proton whose vkd3d-proton uses
-    present timing; from /mnt/alpha/Protons and Steam's compatibilitytools.d."""
+    """PML_PROTON_D3D12, else proton-wineland, else the newest Proton whose vkd3d-proton uses present timing; from
+    Steam's compatibilitytools.d and the directories in PML_PROTON_ROOTS (colon-separated)."""
     p = os.environ.get("PML_PROTON_D3D12")
     if p:
         return p if os.path.isfile(os.path.join(p, "proton")) else None
     cands = []
-    for root in ("/mnt/alpha/Protons", COMPAT_DIR):
+    roots = [r for r in os.environ.get("PML_PROTON_ROOTS", "").split(":") if r] + [COMPAT_DIR]
+    for root in roots:
         cands += [c for c in glob.glob(os.path.join(root, "*")) if os.path.isfile(os.path.join(c, "proton"))]
     cands.sort(key=lambda c: ("wineland" in os.path.basename(c), _version_key(c)), reverse=True)
     for c in cands:

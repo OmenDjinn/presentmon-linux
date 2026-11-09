@@ -12,7 +12,13 @@ unmodified) to produce the CSV. Design: `docs/ARCHITECTURE.md`.
 Status: M1 (CLI + overlay) and M2's GPU columns (GPU busy / wait / latency / time, from GPU timestamps the layer
 adds around each queue submission; `PRESENTMON_GPU=0` turns them off). Input/click-to-photon columns are NA.
 Tested under Proton with D3D11 and D3D12 test programs (GE-Proton 11 with DXVK 3.1.1, DXVK 2.5.1, and
-proton-wineland's vkd3d-proton), and live in Lies of P (vkd3d-proton).
+proton-wineland's vkd3d-proton), and live in Lies of P (vkd3d-proton). Also: a frame rate cap that waits where the
+game is paced (`presentmon cap`), and two 0-100 scores, VRR stability and an experience score.
+
+Credits: built on [Intel PresentMon](https://github.com/GameTechDev/PresentMon) (its metrics code runs unmodified),
+[PyroFling](https://github.com/Themaister/pyrofling) by Hans-Kristian Arntzen (the present-timing
+measurement approach the layer's timing is based on), and [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut (overlay). MIT licensed:
+`LICENSE`; third-party licenses: `THIRD_PARTY_NOTICES.md`. Not affiliated with Intel.
 
 ## Build
 

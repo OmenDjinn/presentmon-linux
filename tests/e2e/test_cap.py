@@ -357,7 +357,7 @@ class CapCompare(pt.LiveCase):
     def test_vkd3d_vsync(self):
         """D3D12 under vkd3d-proton with V-Sync on: its wait worker waits for every FIFO present (vkWaitForPresent2KHR)
         before it releases the game thread; the layer holds that wait, with the game's own latency. The window's
-        class is steam_proton: run with a window rule for it (kwin-test-rule add steam_proton)."""
+        class is steam_proton: a KWin window rule for that class keeps it off the main screen."""
         r = self.dxvk_compare("D3D12 under Proton/vkd3d-proton, V-Sync on", 1, [
             ("game cap", ["--fps", "%g" % TARGET], {}),
             ("layer late", [], layer_cap(TARGET)),

@@ -12,7 +12,7 @@ Status: **M0/M1 in progress on branch `m1-cli-overlay`** (CLI collector + in-gam
 | Desktop | Plasma / KWin 6.8.2, Wayland |
 | DP-2 (primary) | 2560x1440 @ 240 Hz, VRR Automatic, **HDR on** |
 | DP-1 | 2560x1440 @ 120 Hz rotated (portrait, 1440x2560 logical), VRR Never, HDR off |
-| `/dev/uinput` | already rw for `taha` through an ACL, so no udev rule or `usermod` is needed |
+| `/dev/uinput` | already rw for the desktop user through an ACL, so no udev rule or `usermod` is needed |
 | `/dev/input/event*` (real input) | not readable (user is not in `input`) |
 | Proton | GE-Proton11-11, proton-cachyos-11.0, **proton-wineland-11.0**, UMU-Proton-10.0-4 |
 | Tooling present | cmake, ninja, glslang, spirv-tools, gtest, mingw-w64-gcc, lib32 Vulkan loader + NVIDIA, python-evdev |
