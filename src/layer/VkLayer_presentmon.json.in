@@ -1,0 +1,20 @@
+{
+	"file_format_version": "1.2.0",
+	"layer": {
+		"name": "VK_LAYER_presentmon_linux",
+		"type": "GLOBAL",
+		"library_path": "@PML_LAYER_LIBRARY_PATH@",
+		"api_version": "@PML_LAYER_API_VERSION@",
+		"implementation_version": "1",
+		"description": "presentmon-linux: frame timing records and in-game overlay",
+		"functions": {
+			"vkNegotiateLoaderLayerInterfaceVersion": "vkNegotiateLoaderLayerInterfaceVersion"
+		},
+		"enable_environment": {
+			"PRESENTMON_LAYER": "1"
+		},
+		"disable_environment": {
+			"DISABLE_PRESENTMON_LAYER": "1"
+		}
+	}
+}

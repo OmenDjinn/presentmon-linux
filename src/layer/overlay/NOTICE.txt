@@ -1,0 +1,14 @@
+Third-party material compiled into the overlay
+==============================================
+
+Dear ImGui (third_party/imgui), MIT, Copyright (c) 2014-2026 Omar Cornut.
+  Compiled unmodified; configuration in imconfig_pml.h.
+
+Cousine-Regular.ttf (third_party/imgui/misc/fonts), by Steve Matteson,
+  Digitized data copyright (c) 2010 Google Corporation,
+  licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
+  Embedded at build time as a byte array (cmake -P embed.cmake) and loaded from memory; nothing
+  is read from disk at runtime. The font is embedded unmodified and is not sold on its own.
+
+stb_image_write.h (third_party/pyrofling/Granite/third_party/stb), public domain / MIT,
+  Sean Barrett. Used only by the PRESENTMON_OVERLAY_DUMP test hook.
