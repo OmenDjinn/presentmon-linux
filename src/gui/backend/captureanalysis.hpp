@@ -54,6 +54,7 @@ class CaptureAnalysis : public QObject
 	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY loadedChanged)
 	// Experience score (pml/metrics/experience.hpp) over the same frames.
 	Q_PROPERTY(int experienceScore READ experienceScore NOTIFY loadedChanged)           // 0-100, -1 = none
+	Q_PROPERTY(int pacingScore READ pacingScore NOTIFY loadedChanged)                   // judder + stutters only, -1 = none
 	Q_PROPERTY(QString experienceVerdict READ experienceVerdict NOTIFY loadedChanged)   // "smooth" ... "very rough"
 	Q_PROPERTY(QString experienceCause READ experienceCause NOTIFY loadedChanged)       // main cause, "" from 85 up
 	Q_PROPERTY(QString experienceDetail READ experienceDetail NOTIFY loadedChanged)     // the numbers behind the score
@@ -100,6 +101,7 @@ public:
 	QString vrrCause() const;
 	QString vrrDetail() const;
 	int experienceScore() const;
+	int pacingScore() const;
 	QString experienceVerdict() const;
 	QString experienceCause() const;
 	QString experienceDetail() const;

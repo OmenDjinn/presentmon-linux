@@ -143,6 +143,13 @@ Latency at 100 fps, from the game's frame start to the first pixel (medians of 2
   - To cap through it, raise the game's own interval to `max(game, ceil(1e6 / cap))`, so a game's lower cap stays.
   - vk.xml marks no external synchronization on these commands, so another thread may change the sleep mode.
   - For a native Vulkan game a present-side wait already equals a game-thread wait, so Reflex gains nothing there.
+- **A Reflex interval evens out frame starts, not presents.** In a vkd3d-proton game (Spider-Man 2, V-Sync off, VRR,
+  60 fps cap through `minimumIntervalUs`), frame starts were paced, but the game's per-frame CPU work varied by
+  several ms. Presents, and under VRR the screen, came 11-27 ms apart: 67 % of frames jumped more than 2 ms and
+  the animation error averaged 3.6 ms. An early present-side wait (`--placement early --no-reflex`) put presents on
+  an even grid. Jumps fell to 16-30 %, animation error to 0.9-1.4 ms, and pacing went from 67 to 89-95, at the cost
+  of about a frame of latency. For games with uneven CPU work per frame, pace the presents, not only the starts.
+  presentmon-linux now uses the Reflex interval only with late placement; early always waits at the present.
 - **The "just under VRR maximum" cap.** `floor(hz - hz^2/3600)` (224 at 240 Hz, 138 at 144) is a community
   estimate; we found no NVIDIA source.
 - **Rate accuracy:** an absolute grid holds the rate exactly (0.000 %). MangoHud's relative sleep runs 0.003-0.007 %
@@ -175,6 +182,14 @@ Latency at 100 fps, from the game's frame start to the first pixel (medians of 2
   about 0. Detecting stutter needs both signals.
 - **One missed refresh is judder, not a hitch.** A frame shown for exactly two refreshes (90 fps on 120 Hz) must
   not count as a stutter, or judder is penalised twice.
+- **Report consistency separately from frame rate.** Players mean "frames come evenly" by smooth. A score that also
+  rewards frame rate makes a steady 60 fps look like a defect. presentmon-linux shows a pacing score (judder and
+  stutters only) next to the overall one.
+- **Pacing needs its own scale.** Judder and stutter weighed lightly inside an overall score (fine next to frame
+  rate and latency) compress a standalone pacing score: a visibly juddery 12/21 ms alternation still scored 89.
+  At 3x it scores 67, against 89-95 for the same game evenly paced.
+- **The 1% low / average ratio misses alternation.** Two runs of one game, one alternating 12/21 ms and one even, both
+  read 0.71 on present times. Only screen intervals and animation error separate them.
 - **Perception research gives anchors, not a full model.**
   - QoE is about linear in frame time and flattens above 75-90 fps.
   - Swings of about 2 ms go unnoticed.

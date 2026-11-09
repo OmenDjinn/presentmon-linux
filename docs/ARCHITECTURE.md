@@ -351,8 +351,9 @@ The margin follows the p99 of wake-up lateness (re-derived every 32 sleeps, 30 u
 (seccomp) falls back to `nanosleep`, else spins and is logged; an interval is never longer than 1 s.
 
 **Where it waits** (one plan per `vkQueuePresentKHR`, for the call's largest swapchain), in this order:
-1. **Reflex** (`VK_NV_low_latency2`): the app called `vkLatencySleepNV` in the last 500 ms, so its own sleep paces
-   the game thread. The layer sends the app's sleep mode with `minimumIntervalUs = max(app, ceil(1e6 / cap))`
+1. **Reflex** (`VK_NV_low_latency2`), late placement only: the app called `vkLatencySleepNV` in the last 500 ms, so
+   its own sleep paces the game thread. Early placement never uses it: a Reflex interval spaces the frames' starts,
+   not their presents, so a game with uneven CPU work per frame still presents unevenly (docs/FINDINGS.md 6). The layer sends the app's sleep mode with `minimumIntervalUs = max(app, ceil(1e6 / cap))`
    (the app's own lower cap stays) and waits nowhere else. Committed only when the driver accepts it (else the
    present-side wait covers and the layer retries every second); the app's mode is restored when the cap goes.
    NVIDIA 615 enforces the interval even with `lowLatencyMode` false, about 0.5 % long (10.05 ms for 10 ms).
@@ -429,6 +430,15 @@ GQI stays next to the 1% lows for comparison with Blackbird PC Tech's charts.
 | motion | RMS of MsAnimationError over non-hitch frames | min(30, 3 x max(0, rms - 1 ms)) | ~2 ms swings unnoticed, 6 ms bias perception to the long frames ([Klein et al. 2024](https://arxiv.org/abs/2306.01691)); frame-time SD slope -0.056 QoE/ms ([Xu & Claypool 2024](https://web.cs.wpi.edu/~claypool/papers/frame-variation-mmsys-24/paper.pdf)) |
 | stutter | per frame max(screen interval - median, abs(animation error)); a hitch exceeds max(2 x median, median + 8 ms) + 1 ms | min(50, 0.1 x hitch ms per second + 25 x clamp((worst - 50 ms)/100 ms, 0, 1.75)) | interruption magnitude predicts QoE (R2 0.93), frequency does not (0.18) (Xu & Claypool 2024); spikes under ~50 ms acceptable, 150 ms+ hurt ([Tokey et al. 2026](https://web.cs.wpi.edu/~claypool/papers/spikes-fdg-26/paper.pdf)) |
 | latency | median display latency (frame CPU start to screen; DisplayLatency, or MsUntilDisplayed + MsCPUBusy) | 0.848 x (I(L) - I(0)), I = ITU-T G.1072 input-delay impairment, high-sensitivity games: 20 ms 3, 40 ms 6.3, 100 ms 16.6 | G.1072 ([ITU](https://www.itu.int/rec/T-REC-G.1072/en)); FPS aiming degrades from ~40 ms (Ivkovic et al. 2015), 25 vs 55 vs 85 ms matters most for skilled players (NVIDIA) |
+
+**Pacing score**: `100 - 3 x (motion + stutter)`, the consistency part alone, shown next to the overall score
+(overlay "pace", GUI "Pacing", compare table). A steady stream scores 100 at any frame rate, so it answers "is it
+even?" independently of "how fast?". Inside the overall score judder and stutters are weighed against frame rate and
+latency. Shown on their own, they need 3x the scale for the same bands. That is a design choice calibrated on
+recordings: a 12/21 ms alternation players call juddery scores 67, the same game evenly paced 89-95, a 100 ms
+freeze every 4 s 52, 90 fps on a fixed 120 Hz screen 74. The 1% low / average ratio could not tell these apart: it
+read 0.71 for both the juddery and the evenly paced run of the same game, because it looks only at the slowest 1 %.
+Frame rate is named as the cause only below 58 fps shown: 60 fps and more is a choice, not a defect.
 
 Why both screen intervals and animation error: under V-Sync a full queue hides a 30 ms CPU hitch from the screen
 cadence (only the motion jumps), while a 100 ms freeze moves screen and simulation together (no animation error):

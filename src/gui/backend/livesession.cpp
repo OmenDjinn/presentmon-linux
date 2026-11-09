@@ -44,7 +44,7 @@ struct Numbers
 	qulonglong lost = 0;
 	int vrrScore = -1;
 	QString vrrState, vrrVerdict, vrrCause, vrrDetail, vrrSource;
-	int experienceScore = -1;
+	int experienceScore = -1, pacingScore = -1;
 	QString experienceVerdict, experienceCause, experienceDetail;
 
 	bool operator==(const Numbers &o) const
@@ -57,7 +57,7 @@ struct Numbers
 		       same(displayLatencyMs, o.displayLatencyMs) && same(untilDisplayedMs, o.untilDisplayedMs) &&
 		       same(readyToScreenMs, o.readyToScreenMs) && same(droppedPct, o.droppedPct) && vrrScore == o.vrrScore &&
 		       vrrState == o.vrrState && vrrVerdict == o.vrrVerdict && vrrCause == o.vrrCause &&
-		       vrrDetail == o.vrrDetail && vrrSource == o.vrrSource && experienceScore == o.experienceScore &&
+		       vrrDetail == o.vrrDetail && vrrSource == o.vrrSource && experienceScore == o.experienceScore && pacingScore == o.pacingScore &&
 		       experienceVerdict == o.experienceVerdict && experienceCause == o.experienceCause &&
 		       experienceDetail == o.experienceDetail;
 	}
@@ -87,6 +87,7 @@ Numbers fromSnapshot(const Snapshot &s)
 	n.droppedPct = s.droppedPct;
 	const pml::metrics::ExperienceVerdict &e = s.experience;
 	n.experienceScore = e.score;
+	n.pacingScore = e.pacingScore;
 	n.experienceVerdict = QString::fromLatin1(pml::metrics::experienceVerdictLabel(e.score));
 	n.experienceCause = QString::fromLatin1(pml::metrics::experienceCauseLabel(e.cause));
 	n.experienceDetail = QString::fromStdString(pml::metrics::experienceDetail(e));
@@ -466,6 +467,7 @@ QString LiveSession::vrrCause() const { return d_->numbers.vrrCause; }
 QString LiveSession::vrrDetail() const { return d_->numbers.vrrDetail; }
 QString LiveSession::vrrSource() const { return d_->numbers.vrrSource; }
 int LiveSession::experienceScore() const { return d_->numbers.experienceScore; }
+int LiveSession::pacingScore() const { return d_->numbers.pacingScore; }
 QString LiveSession::experienceVerdict() const { return d_->numbers.experienceVerdict; }
 QString LiveSession::experienceCause() const { return d_->numbers.experienceCause; }
 QString LiveSession::experienceDetail() const { return d_->numbers.experienceDetail; }

@@ -118,6 +118,7 @@ ColumnLayout {
         QQC2.CheckBox {
             Kirigami.FormData.label: "Reflex:"
             visible: controls.mode !== 0
+            enabled: controls.placement === 0
             text: "Use the game's Reflex when it has it"
             checked: controls.reflex
             onToggled: {
@@ -126,7 +127,7 @@ ColumnLayout {
             }
             QQC2.ToolTip.visible: hovered
             QQC2.ToolTip.delay: Kirigami.Units.toolTipDelay
-            QQC2.ToolTip.text: "With Reflex on in the game, the cap goes into Reflex's own frame interval, so the game waits before it reads input: lower latency than any wait at the present."
+            QQC2.ToolTip.text: "With Reflex on in the game and the wait after the present, the cap goes into Reflex's own frame interval, so the game waits before it reads input: lower latency than any wait at the present. Reflex only spaces the frames' starts evenly; \"Before the present\" spaces the frames themselves evenly and never uses it."
         }
     }
 

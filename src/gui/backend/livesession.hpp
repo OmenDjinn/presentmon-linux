@@ -69,6 +69,7 @@ class LiveSession : public QObject
 	Q_PROPERTY(QString vrrSource READ vrrSource NOTIFY statsChanged)      // what the driver says, and where
 	// Experience score (pml/metrics/experience.hpp) over the same frames.
 	Q_PROPERTY(int experienceScore READ experienceScore NOTIFY statsChanged)           // 0-100, -1 = none
+	Q_PROPERTY(int pacingScore READ pacingScore NOTIFY statsChanged)                   // judder + stutters only, -1 = none
 	Q_PROPERTY(QString experienceVerdict READ experienceVerdict NOTIFY statsChanged)   // "smooth" ... "very rough"
 	Q_PROPERTY(QString experienceCause READ experienceCause NOTIFY statsChanged)       // main cause, "" from 85 up
 	Q_PROPERTY(QString experienceDetail READ experienceDetail NOTIFY statsChanged)     // the numbers behind the score
@@ -122,6 +123,7 @@ public:
 	QString vrrDetail() const;
 	QString vrrSource() const;
 	int experienceScore() const;
+	int pacingScore() const;
 	QString experienceVerdict() const;
 	QString experienceCause() const;
 	QString experienceDetail() const;

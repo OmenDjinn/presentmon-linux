@@ -19,6 +19,7 @@ GridLayout {
         { label: "1% low", key: "low1Fps", unit: "fps", higher: true, kind: "fps" },
         { label: "0.1% low", key: "low01Fps", unit: "fps", higher: true, kind: "fps" },
         { label: "Experience score", key: "experienceScore", unit: "/ 100", higher: true, kind: "score" },
+        { label: "Pacing score", key: "pacingScore", unit: "/ 100", higher: true, kind: "score" },
         { label: "Gaming Quality Index", key: "gqi", unit: "", higher: true, kind: "num" },
         { label: "Average frame time", key: "avgMs", unit: "ms", higher: false, kind: "ms" },
         { label: "95th percentile", key: "p95Ms", unit: "ms", higher: false, kind: "ms" },

@@ -214,6 +214,17 @@ class Cap(pt.LiveCase):
         self.assertGreater(sleep, 5.0, "the app's latency sleep holds the frame")
 
 
+    def test_early_placement_never_uses_reflex(self):
+        """A Reflex app with placement early: the cap waits at the present (evenly spaced presents), not in the
+        Reflex interval, which spaces only the frames' starts."""
+        run = self.run_native(["--ll2"] + NATIVE_APP, layer_cap(TARGET, "early"))
+        m = native_metrics(run, TARGET)
+        show("cap 100 early with Reflex in the app", fps=m["fps"], sd_ms=m["sd_ms"], in_present_ms=m["in_present_ms"])
+        self.assertIn("via present wait (early)", run.stderr, run.describe())
+        self.assertNotIn("via Reflex interval", run.stderr)
+        self.assertLess(abs(m["err_pct"]), 0.1, "the layer's own grid holds the rate exactly")
+
+
 @pt.not_on_shared_desktop("cap comparisons measure timing and need an otherwise idle machine")
 class CapCompare(pt.LiveCase):
     def compare(self, title, configs, app_extra, target, reps=REPS, seconds=4):

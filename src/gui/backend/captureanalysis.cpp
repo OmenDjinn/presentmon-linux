@@ -292,6 +292,7 @@ QString CaptureAnalysis::vrrDetail() const
 	    .arg(qulonglong(v.frames));
 }
 int CaptureAnalysis::experienceScore() const { return d_->experience.score; }
+int CaptureAnalysis::pacingScore() const { return d_->experience.pacingScore; }
 QString CaptureAnalysis::experienceVerdict() const
 {
 	return QString::fromLatin1(pml::metrics::experienceVerdictLabel(d_->experience.score));

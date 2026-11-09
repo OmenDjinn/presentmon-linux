@@ -28,8 +28,10 @@ void usage(FILE *out)
 	           "  status       print the setting and what is in force\n"
 	           "  --placement  late (default): wait after the driver's present, or, when the game has a frame-pacing\n"
 	           "               thread (DXVK, VKD3D), hold that thread instead, as their own limiters do (lowest latency)\n"
-	           "               early: wait before the present (most even present spacing, more latency)\n"
-	           "  --no-reflex  never use the game's Reflex (NV_low_latency2) interval; --reflex allows it again\n"
+	           "               early: wait before the present (most even present spacing, more latency; never\n"
+	           "               through Reflex, whose interval paces only the frames' starts)\n"
+	           "  --no-reflex  never use the game's Reflex (NV_low_latency2) interval with late placement; --reflex\n"
+	           "               allows it again\n"
 	           "  Without --process_name/--process_id every live layer-enabled process is addressed.\n",
 	           out);
 }

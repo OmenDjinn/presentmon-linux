@@ -10,6 +10,7 @@ Rectangle {
     id: panel
 
     property int score: -1          // 0-100, -1 = none
+    property int pacing: -1         // pacing score: judder and stutters only, the same at any frame rate
     property string verdict: ""     // "smooth", "minor issues", "rough", "very rough"
     property string cause: ""       // "low frame rate", "judder (uneven motion)", "stutters", "high latency"
     property string detail: ""
@@ -90,6 +91,18 @@ Rectangle {
                     radius: parent.radius
                     color: panel.scoreColor
                 }
+            }
+            // Pacing: consistency alone (judder, stutters), the same for a steady 60 and a steady 240 fps.
+            QQC2.Label {
+                Layout.topMargin: Kirigami.Units.smallSpacing
+                visible: panel.pacing >= 0
+                textFormat: Text.StyledText
+                text: "Pacing <b>" + panel.pacing + "</b> / 100"
+                color: panel.pacing >= 85 ? Kirigami.Theme.positiveTextColor
+                     : panel.pacing >= 65 ? Kirigami.Theme.neutralTextColor : Kirigami.Theme.negativeTextColor
+                QQC2.ToolTip.visible: pacingHover.hovered
+                QQC2.ToolTip.text: "Pacing: how evenly frames reach the screen and how evenly motion moves (judder and stutters), whatever the frame rate. A steady 60 fps scores 100."
+                HoverHandler { id: pacingHover }
             }
         }
 

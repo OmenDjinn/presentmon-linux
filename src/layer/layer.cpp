@@ -1293,7 +1293,11 @@ CapPlan planCap(DeviceState &dev, const VkPresentInfoKHR *info, uint64_t nowNs)
 	auto &ll = sw.lowLatency;
 	const uint64_t lastSleep = ll.lastSleepNs.load(std::memory_order_relaxed);
 	const bool reflexSeen = lastSleep != 0 && int64_t(nowNs - lastSleep) < kReflexRecentNs;
-	const bool wantReflex = d.fps > 0.0 && d.allowReflex && dev.dt.SetLatencySleepModeNV && reflexSeen;
+	// Reflex only for late placement: early asks for evenly spaced presents, and a Reflex interval paces only the
+	// frames' starts (a game with uneven CPU work per frame still presents unevenly; docs/FINDINGS.md 6).
+	const bool earlyPlacement = d.placement == uint32_t(pml::CapPlacement::Early);
+	const bool wantReflex =
+	    d.fps > 0.0 && d.allowReflex && !earlyPlacement && dev.dt.SetLatencySleepModeNV && reflexSeen;
 	const uint32_t wantUs = wantReflex ? capIntervalUs(d.fps) : 0;
 	{
 		std::lock_guard<std::mutex> lock(ll.mutex);

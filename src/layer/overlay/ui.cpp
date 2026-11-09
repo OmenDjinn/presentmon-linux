@@ -73,6 +73,7 @@ std::string snapshotSummary(const Snapshot &s, bool displayTiming)
 	                  " dropped_pct=" + f(d ? s.droppedPct : kNA, "%.1f") +
 	                  " vrr_state=" + pml::metrics::vrrStateLabel(s.vrr.state) + " vrr_score=" + std::to_string(s.vrr.score) +
 	                  " experience_score=" + std::to_string(s.experience.score) +
+	                  " pacing_score=" + std::to_string(s.experience.pacingScore) +
 	                  " rows=" + std::to_string(s.rowsTotal);
 	return out;
 }
@@ -297,7 +298,8 @@ void drawOverlayUi(const UiParams &p)
 
 	if (p.panels & pml::kPanelExperience)
 	{
-		// "Exp    92/100  smooth", and the main cause below it when under 85 ("Exp    61/100  rough" / "stutters").
+		// "Exp    84/100  minor issues  pace 96", and the main cause below it when under 85. Pace = consistency
+		// alone (judder, stutters), the same at any frame rate.
 		const pml::metrics::ExperienceVerdict &e = s.experience;
 		label("Exp   ", true);
 		if (!have || !s.hasDisplayInfo || e.score < 0)
@@ -315,6 +317,10 @@ void drawOverlayUi(const UiParams &p)
 			part(col, buf);
 			part(kLabel, "/100  ");
 			part(col, pml::metrics::experienceVerdictLabel(e.score));
+			char pace[16];
+			std::snprintf(pace, sizeof(pace), "%d", e.pacingScore);
+			part(kLabel, "  pace ");
+			part(e.pacingScore >= 85 ? kValue : kWarn, pace);
 			if (e.cause != pml::metrics::ExperienceCause::None)
 			{
 				label("      ", true);

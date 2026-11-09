@@ -21,7 +21,12 @@
 //
 // The weights between the terms are a design choice: no study measures smoothness against latency.
 // Presented like the VRR verdict (pml/metrics/vrr.hpp): 0-100, the same bands (>= 85 smooth, >= 65 minor issues,
-// >= 40 rough, below: very rough) and the largest impairment as the cause when the score is below 85.
+// >= 40 rough, below: very rough) and the largest impairment as the cause when the score is below 85; frame rate is
+// named only below 58 fps shown (60 fps is not a defect).
+// Pacing score: 100 - 3 x (motion + stutter), the consistency part alone: the same for a steady 60 fps and a steady
+// 240 fps. Inside the overall score judder and stutters are weighed against frame rate and latency; shown on their
+// own they need 3x the scale for the same bands (a design choice, calibrated on recordings: a 12/21 ms alternation
+// that players call juddery scores 67, the same game paced evenly 89-95, a 100 ms freeze every 4 s 53).
 #pragma once
 
 #include <cstdint>
@@ -53,6 +58,7 @@ struct ExperienceVerdict
 	static constexpr size_t kMinFrames = 50;
 
 	int score = -1;                // 0-100, -1 = none (fewer than kMinFrames displayed frames)
+	int pacingScore = -1;          // 0-100: judder and stutters only (frame rate and latency left out), same bands; -1 = none
 	ExperienceCause cause = ExperienceCause::None;   // the largest impairment when the score is below 85
 	size_t frames = 0;             // displayed frames used
 	double displayFps = kNA;       // screen updates per second
@@ -70,6 +76,9 @@ ExperienceVerdict analyzeExperience(std::span<const ExperienceFrame> frames);
 // Short English labels for UIs.
 const char *experienceVerdictLabel(int score);              // "smooth", "minor issues", "rough", "very rough", "" for -1
 const char *experienceCauseLabel(ExperienceCause cause);    // e.g. "stutters"; "" for None
+// Below this displayed frame rate, a low frame rate can be named as the cause.
+inline constexpr double kExperienceLowFps = 58.0;
+
 // The numbers behind the score, points taken off per term: "120 fps shown: rate -2.6 · judder -0.0 (1.9 ms RMS) ·
 // stutters -14.5 (1 hitch, worst 108 ms) · latency -2.8 (16 ms) · 900 frames"; "" for score -1.
 std::string experienceDetail(const ExperienceVerdict &verdict);

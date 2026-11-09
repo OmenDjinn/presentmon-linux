@@ -113,3 +113,36 @@ TEST(Experience, ACapThatIsSmootherBeatsFastButSpiky)
 		spiky.push_back({i % 200 == 199 ? 60.0f : (i % 2 ? 3.5f : 6.5f), i % 2 ? -3.0f : 3.0f, 8.0f});
 	EXPECT_GT(capped.score, analyzeExperience(spiky).score);
 }
+
+TEST(Experience, PacingIgnoresFrameRate)
+{
+	// Steady 60 and steady 240: different overall scores, the same perfect pacing.
+	const ExperienceVerdict s60 = analyzeExperience(steady(600, 1000.0f / 60.0f));
+	const ExperienceVerdict s240 = analyzeExperience(steady(2400, 1000.0f / 240.0f));
+	EXPECT_EQ(s60.pacingScore, 100);
+	EXPECT_EQ(s240.pacingScore, 100);
+	EXPECT_LT(s60.score, s240.score);
+	EXPECT_GE(s60.score, 85) << "a steady 60 fps is smooth";
+	// Judder lowers pacing at any rate.
+	std::vector<ExperienceFrame> j;
+	for (int i = 0; i < 900; i++)
+		j.push_back({i % 2 ? 12.0f : 21.0f, i % 2 ? -4.5f : 4.5f, 10.0f});
+	EXPECT_LT(analyzeExperience(j).pacingScore, 75) << "a 12/21 ms alternation is visibly juddery";
+	EXPECT_STREQ(experienceVerdictLabel(analyzeExperience(j).pacingScore), "minor issues");
+	EXPECT_EQ(analyzeExperience({}).pacingScore, -1);
+}
+
+TEST(Experience, SixtyFpsIsNotNamedAsTheCause)
+{
+	// 60 fps with a little judder and some latency: under 85, but the frame rate is not the defect.
+	std::vector<ExperienceFrame> v;
+	for (int i = 0; i < 900; i++)
+		v.push_back({16.67f, i % 2 ? -2.2f : 2.2f, 25.0f});
+	const ExperienceVerdict s = analyzeExperience(v);
+	ASSERT_LT(s.score, 85);
+	EXPECT_GT(s.rate, s.motion);
+	EXPECT_NE(s.cause, ExperienceCause::Rate);
+	// 40 fps: named.
+	const ExperienceVerdict low = analyzeExperience(steady(400, 25.0f));
+	EXPECT_EQ(low.cause, ExperienceCause::Rate);
+}

@@ -362,6 +362,7 @@ Kirigami.Page {
                         Layout.fillWidth: true
                         visible: single.a && single.a.loaded && single.a.hasDisplay
                         score: single.a ? single.a.experienceScore : -1
+                        pacing: single.a ? single.a.pacingScore : -1
                         verdict: single.a ? single.a.experienceVerdict : ""
                         cause: single.a ? single.a.experienceCause : ""
                         detail: single.a ? single.a.experienceDetail : ""

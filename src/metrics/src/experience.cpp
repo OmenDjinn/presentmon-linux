@@ -143,15 +143,18 @@ ExperienceVerdict analyzeExperience(std::span<const ExperienceFrame> frames)
 	}
 
 	s.score = int(std::lround(std::clamp(100.0 - s.rate - s.motion - s.stutter - s.latency, 0.0, 100.0)));
+	s.pacingScore = int(std::lround(std::clamp(100.0 - 3.0 * (s.motion + s.stutter), 0.0, 100.0)));
 
 	if (s.score < 85)
 	{
+		// A frame rate of 60 or more is not named as a cause (it is a choice, not a defect).
+		const bool rateIsLow = s.displayFps < kExperienceLowFps;
 		const double terms[] = {s.rate, s.motion, s.stutter, s.latency};
 		const ExperienceCause causes[] = {ExperienceCause::Rate, ExperienceCause::Motion, ExperienceCause::Stutter,
 		                                  ExperienceCause::Latency};
 		double worst = 0;
 		for (size_t i = 0; i < 4; i++)
-			if (terms[i] > worst)
+			if (terms[i] > worst && (i != 0 || rateIsLow))
 			{
 				worst = terms[i];
 				s.cause = causes[i];

@@ -266,6 +266,7 @@ Kirigami.Page {
                     Layout.rightMargin: Kirigami.Units.largeSpacing * 2
                     visible: live.hasDisplayInfo
                     score: live.experienceScore
+                    pacing: live.pacingScore
                     verdict: live.experienceVerdict
                     cause: live.experienceCause
                     detail: live.experienceDetail

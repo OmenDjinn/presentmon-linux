@@ -183,7 +183,8 @@ Runtime control from another terminal: `presentmon overlay toggle` (or show/hide
 
 Two scores on the overlay and in the GUI, both out of 100 with a verdict and a main cause: **VRR** (how evenly frames
 reach a VRR screen) and **Exp** (experience: frame rate shown, judder, stutters and latency together; how it is built
-and validated: `docs/ARCHITECTURE.md` 3.4.3). The FPS section also shows Blackbird PC Tech's GQI next to the lows.
+and validated: `docs/ARCHITECTURE.md` 3.4.3), with **pace** next to it: consistency alone (judder and stutters),
+the same for a steady 60 and a steady 240 fps. The FPS section also shows Blackbird PC Tech's GQI next to the lows.
 
 ### Global shortcut in KDE (instructions, not configured)
 
@@ -199,7 +200,7 @@ A frame rate limiter inside the layer (design and measurements: `docs/ARCHITECTU
 | Variable | Meaning |
 |---|---|
 | `PRESENTMON_FPS_CAP=<fps>` / `auto` / `off` | cap at that rate (1-10000, e.g. `141` or `59.94`); `auto`: just under the VRR maximum of the output with VRR on (223 at 239.99 Hz), nothing while VRR is off |
-| `PRESENTMON_CAP_PLACEMENT=late` / `early` | `late` (default): lowest latency; `early`: waits before the present, most even spacing, about a frame more latency |
+| `PRESENTMON_CAP_PLACEMENT=late` / `early` | `late` (default): lowest latency (through the game's Reflex when it has it); `early`: waits before the present, most even spacing, about a frame more latency, never through Reflex |
 | `PRESENTMON_CAP_REFLEX=0` | never use the game's Reflex (NV_low_latency2) interval |
 
 Live, from another terminal (or the GUI's Live page, "Frame cap"):
