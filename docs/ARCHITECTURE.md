@@ -309,6 +309,12 @@ Zero means "missing" throughout PresentMon's code, so a real timestamp must neve
   GPU work lands after the app's work, so it is inside `readyTime` but outside the app's GPU busy time (its
   submissions go down below the layer's hooks).
 
+- **GQI** (Gaming Quality Index, Blackbird PC Tech, 2025; shown on the overlay's FPS panel, the GUI's Live and
+  Captures pages): 1% low^2 / (60 x average fps) = (1% low / 60) x (1 - (average - 1% low) / average), from
+  `pml/metrics/summary.hpp`. Its 1% low is time-weighted (slowest frames summed until 1 % of the time), not the
+  mean-of-slowest-1 % shown next to it. >= 1: 1% lows of 60 fps or more with little spread. It has no upper
+  bound (it grows with frame rate), and the 60 fps reference ignores the refresh rate.
+
 ### 3.4.1 VRR stability verdict (`src/metrics/include/pml/metrics/vrr.hpp`)
 One analyzer, used by the overlay (last 10 s of displayed frames), the GUI's Live page (the same, plus the
 driver's VRR state) and its Captures page (a whole CSV). Per pair of consecutive displayed frames it looks at the
@@ -408,6 +414,50 @@ start, after any wait of its own, to first pixel; medians):
   held in FIFO) and vkd3d-proton with V-Sync off (its wait worker waits on a timeline semaphore, not a present).
   There the layer is as good as MangoHud; the game's own cap, `DXVK_FRAME_RATE`/`VKD3D_FRAME_RATE` or Reflex are
   a frame better.
+
+### 3.4.3 Experience score (`src/metrics/include/pml/metrics/experience.hpp`)
+One 0-100 number for how a game plays, from what reached the screen; presented like the VRR verdict (same bands:
+>= 85 smooth, >= 65 minor issues, >= 40 rough, below: very rough; the largest term as the cause under 85). Overlay
+panel "Exp" (last 10 s), GUI Live and Captures pages, the capture compare table. It replaces GQI as the summary;
+GQI stays next to the 1% lows for comparison with Blackbird PC Tech's charts.
+
+    score = 100 - rate - motion - stutter - latency       (additive impairments, as ITU-T G.1072), clipped 0..100
+
+| Term | From | Formula | Evidence |
+|---|---|---|---|
+| rate | mean screen interval t (MsBetweenDisplayChange) | min(60, d^2/(d+3)), d = max(0, t - 4 ms): 120 fps 2.6, 90 fps 5.0, 60 fps 10.2, 30 fps 26.6 | QoE about linear in frame time, flattening at 75-90 fps, slight gains to 500 fps ([Tokey et al. 2025](https://web.cs.wpi.edu/~claypool/papers/fps-500-25/paper.pdf)); collapse below 15-30 fps (Claypool & Claypool 2007) |
+| motion | RMS of MsAnimationError over non-hitch frames | min(30, 3 x max(0, rms - 1 ms)) | ~2 ms swings unnoticed, 6 ms bias perception to the long frames ([Klein et al. 2024](https://arxiv.org/abs/2306.01691)); frame-time SD slope -0.056 QoE/ms ([Xu & Claypool 2024](https://web.cs.wpi.edu/~claypool/papers/frame-variation-mmsys-24/paper.pdf)) |
+| stutter | per frame max(screen interval - median, abs(animation error)); a hitch exceeds max(2 x median, median + 8 ms) + 1 ms | min(50, 0.1 x hitch ms per second + 25 x clamp((worst - 50 ms)/100 ms, 0, 1.75)) | interruption magnitude predicts QoE (R2 0.93), frequency does not (0.18) (Xu & Claypool 2024); spikes under ~50 ms acceptable, 150 ms+ hurt ([Tokey et al. 2026](https://web.cs.wpi.edu/~claypool/papers/spikes-fdg-26/paper.pdf)) |
+| latency | median display latency (frame CPU start to screen; DisplayLatency, or MsUntilDisplayed + MsCPUBusy) | 0.848 x (I(L) - I(0)), I = ITU-T G.1072 input-delay impairment, high-sensitivity games: 20 ms 3, 40 ms 6.3, 100 ms 16.6 | G.1072 ([ITU](https://www.itu.int/rec/T-REC-G.1072/en)); FPS aiming degrades from ~40 ms (Ivkovic et al. 2015), 25 vs 55 vs 85 ms matters most for skilled players (NVIDIA) |
+
+Why both screen intervals and animation error: under V-Sync a full queue hides a 30 ms CPU hitch from the screen
+cadence (only the motion jumps), while a 100 ms freeze moves screen and simulation together (no animation error):
+each signal misses one kind. One missed refresh (exactly 2 x the median) is judder, not a hitch.
+
+Validation (scores from analyzeExperience on the recorded CSVs; tests/apps/vk_truth with `--stutter-every/--stutter-ms/--jitter-ms`, 8 s each; DP-1 fixed 120 Hz windowed,
+DP-2 240 Hz VRR fullscreen):
+
+| Scenario | Score | GQI | Main cost |
+|---|---|---|---|
+| VRR, cap 223 fps | 99 | 3.66 | - |
+| mailbox uncapped (975 presented, 120 shown) | 96 | 15.9 | rate (120 Hz screen) |
+| VRR, uncapped with jitter | 96 | 1.44 | judder |
+| mailbox, app cap 120 | 95 | 1.98 | latency 20 ms |
+| FIFO 120 (3-frame queue) | 92 | 1.90 | latency 38 ms |
+| VRR, cap 141, 25 ms hitch every second | 93 | 0.12 | stutter |
+| FIFO, deep queue + GPU 7 ms | 90 | 1.31 | latency 49 ms |
+| VRR cap 141 with VRR switching on/off | 90 | 2.31 | stutter |
+| FIFO 120, 30 ms CPU hitch every second (hidden by the queue) | 89 | 0.14 | stutter (animation error) |
+| mailbox, jitter 4-12 ms | 86 | 0.93 | judder |
+| FIFO, cap 90 on 120 Hz | 84 | 1.49 | judder |
+| mailbox 120, 100 ms freeze every 4 s | 79 | 0.01 | stutter |
+| FIFO, cap 60 on 120 Hz | 75 | 1.00 | judder |
+| FIFO, cap 40 | 64 | 0.66 | rate |
+
+Limits: the weights between terms are a design choice (no study puts smoothness and latency on one scale); latency
+excludes the mouse/OS input path; no study covers VRR judder, dropped frames or tearing (immediate mode tears; not
+scored); with too few frames (< 50) the score is -1. Animation error uses the frame's CPU start as its simulation time,
+as PresentMon does without app markers.
 
 ### 3.5 `presentmon-gui` (`src/gui/`)
 A Qt 6 Quick + Kirigami app (C++23) in the same tree: one QML module `PresentMon` (static library `pml_gui`: the C++

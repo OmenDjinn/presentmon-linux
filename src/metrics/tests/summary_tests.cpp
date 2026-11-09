@@ -90,3 +90,33 @@ TEST(FrameTimeSummary, MatchesTheOverlaysFormerFormulas)
 		EXPECT_NEAR(s.low01Fps, low01, 1e-9 * low01);
 	}
 }
+
+// Gaming Quality Index (Blackbird PC Tech): 1% low^2 / (60 * average fps), with the video's time-weighted 1% low.
+TEST(FrameTimeSummary, GamingQualityIndex)
+{
+	// Steady 60 fps: 1% low = average = 60, GQI 1.
+	const FrameTimeSummary steady = summarizeFrameTimes(std::vector<float>(600, 1000.0f / 60.0f));
+	EXPECT_NEAR(steady.low1TimeFps, 60.0, 1e-3);
+	EXPECT_NEAR(steady.gqi, 1.0, 1e-4);
+
+	// The video's example: 30 s, 1000 frames, the three slowest add up to 300 ms (1 % of the time), so the 1% low
+	// is the third one's fps.
+	std::vector<float> v(997, float(29700.0 / 997.0));
+	v.insert(v.end(), {120.0f, 100.0f, 80.0f});
+	const FrameTimeSummary s = summarizeFrameTimes(v);
+	EXPECT_NEAR(s.avgMs, 30.0, 1e-3);
+	EXPECT_NEAR(s.low1TimeFps, 1000.0 / 80.0, 1e-6);
+	EXPECT_NEAR(s.gqi, 12.5 * 12.5 / (60.0 * 1000.0 / 30.0), 1e-6);
+
+	// 144 fps average, 1% lows at 100: (100 / 60) * (1 - 44 / 144) = 1.157.
+	std::vector<float> w(9900, 0.0f);
+	const double fast = (1000.0 * 1e4 / 144.0 - 99 * 10.0) / 9801.0;   // 99 frames at 10 ms, the rest faster
+	for (size_t i = 0; i < w.size(); i++)
+		w[i] = i < 99 ? 10.0f : float(fast);
+	const FrameTimeSummary m = summarizeFrameTimes(w);
+	EXPECT_NEAR(m.low1TimeFps, 100.0, 1e-3);
+	const double avg = 1000.0 / m.avgMs;
+	EXPECT_NEAR(m.gqi, (100.0 / 60.0) * (1.0 - (avg - 100.0) / avg), 1e-6);
+
+	EXPECT_TRUE(std::isnan(summarizeFrameTimes({}).gqi));
+}

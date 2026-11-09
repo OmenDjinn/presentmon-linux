@@ -38,7 +38,8 @@ float autoOverlayScale(uint32_t width, uint32_t height);
 // Default panel set when OverlayControl::panels == 0.
 inline constexpr uint32_t kDefaultPanels = pml::kPanelFps | pml::kPanelFrameTimeGraph | pml::kPanelCpu |
                                            pml::kPanelGpu | pml::kPanelLatency | pml::kPanelSwapchain |
-                                           pml::kPanelDropped | pml::kPanelVrr | pml::kPanelCap;
+                                           pml::kPanelDropped | pml::kPanelVrr | pml::kPanelCap |
+                                           pml::kPanelExperience;
 
 // Builds the window; call between ImGui::NewFrame() and ImGui::Render(), with the font already pushed.
 void drawOverlayUi(const UiParams &params);

@@ -25,6 +25,13 @@ struct FrameTimeSummary
 	// Lows: 1000 / mean of the slowest ceil(1 % of count) frames (at least one frame); 0.1 % the same.
 	double low1Fps = kNA;
 	double low01Fps = kNA;
+	// Gaming Quality Index (Blackbird PC Tech, 2025): (1% low / 60 fps) * (1 - (avg - 1% low) / avg)
+	// = 1% low^2 / (60 * avg fps). Its 1% low is time-weighted: frame times sorted slowest first and summed until
+	// they reach 1 % of the total time; the fps of the frame that gets there (as in PresentMon's and Afterburner's
+	// "1% low"). >= 1: 1% lows at or above 60 fps with little spread; the 60 fps reference is fixed, so it keeps
+	// growing with frame rate (no upper bound).
+	double low1TimeFps = kNA;
+	double gqi = kNA;
 };
 
 // Frame times in milliseconds (e.g. MsBetweenPresents). Values that are not > 0 (0, negative, NaN)

@@ -49,6 +49,7 @@ class LiveSession : public QObject
 	Q_PROPERTY(double p99Ms READ p99Ms NOTIFY statsChanged)
 	Q_PROPERTY(double low1Fps READ low1Fps NOTIFY statsChanged)
 	Q_PROPERTY(double low01Fps READ low01Fps NOTIFY statsChanged)
+	Q_PROPERTY(double gqi READ gqi NOTIFY statsChanged)
 	Q_PROPERTY(double cpuBusyMs READ cpuBusyMs NOTIFY statsChanged)
 	Q_PROPERTY(double cpuWaitMs READ cpuWaitMs NOTIFY statsChanged)
 	Q_PROPERTY(double gpuBusyMs READ gpuBusyMs NOTIFY statsChanged)
@@ -66,6 +67,11 @@ class LiveSession : public QObject
 	Q_PROPERTY(QString vrrCause READ vrrCause NOTIFY statsChanged)        // main cause, "" when stable
 	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY statsChanged)      // the numbers behind the score
 	Q_PROPERTY(QString vrrSource READ vrrSource NOTIFY statsChanged)      // what the driver says, and where
+	// Experience score (pml/metrics/experience.hpp) over the same frames.
+	Q_PROPERTY(int experienceScore READ experienceScore NOTIFY statsChanged)           // 0-100, -1 = none
+	Q_PROPERTY(QString experienceVerdict READ experienceVerdict NOTIFY statsChanged)   // "smooth" ... "very rough"
+	Q_PROPERTY(QString experienceCause READ experienceCause NOTIFY statsChanged)       // main cause, "" from 85 up
+	Q_PROPERTY(QString experienceDetail READ experienceDetail NOTIFY statsChanged)     // the numbers behind the score
 
 	// x = seconds since the session attached, y = ms. Trimmed to historySeconds.
 	Q_PROPERTY(FrameSeries *frameTimes READ frameTimes CONSTANT)    // MsBetweenPresents, one point per present
@@ -98,6 +104,7 @@ public:
 	double p99Ms() const;
 	double low1Fps() const;
 	double low01Fps() const;
+	double gqi() const;
 	double cpuBusyMs() const;
 	double cpuWaitMs() const;
 	double gpuBusyMs() const;
@@ -114,6 +121,10 @@ public:
 	QString vrrCause() const;
 	QString vrrDetail() const;
 	QString vrrSource() const;
+	int experienceScore() const;
+	QString experienceVerdict() const;
+	QString experienceCause() const;
+	QString experienceDetail() const;
 
 	FrameSeries *frameTimes() const;
 	FrameSeries *displayTimes() const;

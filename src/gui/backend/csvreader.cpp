@@ -200,6 +200,8 @@ struct Row
 	uint32_t mode;
 	float frame;
 	float display;       // MsBetweenDisplayChange / DisplayedTime as read
+	float animError;     // MsAnimationError / AnimationError
+	float latency;       // DisplayLatency, or MsUntilDisplayed + MsCPUBusy
 	int8_t droppedFlag;  // -1 no Dropped column, else 0 / 1
 	double time;         // in the column's own unit
 };
@@ -284,6 +286,14 @@ bool parseCaptureCsv(const std::string &text, CaptureData *out, std::string *err
 		displayCol = findColumn(cols, "displayedtime");
 		displayIsV2 = displayCol >= 0;
 	}
+	int aeCol = findColumn(cols, "msanimationerror");
+	if (aeCol < 0)
+		aeCol = findColumn(cols, "animationerror");
+	// Display latency (frame CPU start to screen): v2 DisplayLatency, else MsUntilDisplayed + MsCPUBusy (the same
+	// value: CPU busy runs from the frame's CPU start to its present call).
+	const int latCol = findColumn(cols, "displaylatency");
+	const int untilCol = findColumn(cols, "msuntildisplayed");
+	const int busyCol = findColumn(cols, "mscpubusy");
 	const int droppedCol = findColumn(cols, "dropped");
 	const int pidCol = findColumn(cols, "processid");
 	const int chainCol = findColumn(cols, "swapchainaddress");
@@ -330,6 +340,13 @@ bool parseCaptureCsv(const std::string &text, CaptureData *out, std::string *err
 		r.mode = modeCol >= 0 ? modes.get(cell(modeCol)) : 0;
 		r.frame = toFloat(parseNumber(cell(frameCol)));
 		r.display = displayCol >= 0 ? toFloat(parseNumber(cell(displayCol))) : float(kNaN);
+		r.animError = aeCol >= 0 ? toFloat(parseNumber(cell(aeCol))) : float(kNaN);
+		if (latCol >= 0)
+			r.latency = toFloat(parseNumber(cell(latCol)));
+		else if (untilCol >= 0 && busyCol >= 0)
+			r.latency = toFloat(parseNumber(cell(untilCol)) + parseNumber(cell(busyCol)));
+		else
+			r.latency = float(kNaN);
 		r.droppedFlag = droppedCol >= 0 ? (parseNumber(cell(droppedCol)) > 0.5 ? 1 : 0) : -1;
 		if (timeCol >= 0)
 			r.time = timeKind == TimeKind::DateTime ? parseDateTime(cell(timeCol)) : parseNumber(cell(timeCol));
@@ -476,6 +493,13 @@ bool parseCaptureCsv(const std::string &text, CaptureData *out, std::string *err
 	}
 
 	// ---- Display ----
+	out->animationErrorMs.resize(n);
+	out->latencyMs.resize(n);
+	for (size_t i = 0; i < n; ++i)
+	{
+		out->animationErrorMs[i] = rows[i].animError;
+		out->latencyMs[i] = rows[i].latency;
+	}
 	out->displayMs.assign(n, float(kNaN));
 	if (displayCol >= 0)
 	{

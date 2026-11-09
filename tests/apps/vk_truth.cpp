@@ -108,6 +108,9 @@ struct Options
 	double fps = 0;
 	double cpuMs = 0;
 	double gpuMs = 0;
+	uint32_t stutterEvery = 0;   // every Nth frame spends stutterMs more on the CPU
+	double stutterMs = 0;
+	double jitterMs = 0;         // each frame spends a uniform random 0..jitterMs more on the CPU
 	uint32_t width = 1280, height = 720;
 	bool fullscreen = false;
 	std::string display;
@@ -146,6 +149,8 @@ void printHelp()
 		"  --present-mode M     fifo | fifo_relaxed | mailbox | immediate | fifo_latest_ready (default fifo)\n"
 		"  --fps N              frame cap against an absolute schedule; 0 = uncapped (default 0)\n"
 		"  --cpu-ms X           busy-spin X ms per frame on the render thread before submitting\n"
+		"  --stutter-every N --stutter-ms M   every Nth frame spins M ms more (a periodic hitch)\n"
+		"  --jitter-ms J        each frame spins a random 0..J ms more (uneven frame times)\n"
 		"  --gpu-ms X           GPU compute load of X ms per frame, calibrated at startup\n"
 		"window and swapchain\n"
 		"  --size WxH           window size (default 1280x720)\n"
@@ -236,6 +241,9 @@ bool parseArgs(int argc, char **argv, Options &o)
 		else if (a == "--frames") { if (!num(d)) return false; o.frames = uint64_t(d); }
 		else if (a == "--fps") { if (!num(o.fps)) return false; }
 		else if (a == "--cpu-ms") { if (!num(o.cpuMs)) return false; }
+		else if (a == "--stutter-every") { if (!num(d) || d < 1) return false; o.stutterEvery = uint32_t(d); }
+		else if (a == "--stutter-ms") { if (!num(o.stutterMs) || o.stutterMs < 0) return false; }
+		else if (a == "--jitter-ms") { if (!num(o.jitterMs) || o.jitterMs < 0) return false; }
 		else if (a == "--gpu-ms") { if (!num(o.gpuMs)) return false; }
 		else if (a == "--images") { if (!num(d)) return false; o.images = uint32_t(d); }
 		else if (a == "--watchdog") { if (!num(o.watchdog)) return false; }
@@ -1952,8 +1960,16 @@ int App::run()
 		row.cpuStart = monotonicNs();
 		marker(VK_LATENCY_MARKER_SIMULATION_START_NV);
 		marker(VK_LATENCY_MARKER_INPUT_SAMPLE_NV);
-		if (cpuSpinNs)
-			while (monotonicNs() - row.cpuStart < cpuSpinNs) {}
+		uint64_t spinNs = cpuSpinNs;
+		if (opt.stutterEvery && frame % opt.stutterEvery == opt.stutterEvery - 1)
+			spinNs += uint64_t(opt.stutterMs * 1e6);
+		if (opt.jitterMs > 0) {
+			static uint64_t lcg = 0x9e3779b97f4a7c15ull;   // fixed seed: runs are repeatable
+			lcg = lcg * 6364136223846793005ull + 1442695040888963407ull;
+			spinNs += uint64_t(double(lcg >> 11) / double(1ull << 53) * opt.jitterMs * 1e6);
+		}
+		if (spinNs)
+			while (monotonicNs() - row.cpuStart < spinNs) {}
 		row.cpuEnd = monotonicNs();
 		marker(VK_LATENCY_MARKER_SIMULATION_END_NV);
 

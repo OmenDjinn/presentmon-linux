@@ -59,6 +59,22 @@ FrameTimeSummary summarizeFrameTimes(std::span<const float> frameTimesMs)
 	const double w01 = meanOfSlowest(v, 0.001);
 	s.low1Fps = w1 > 0 ? 1000.0 / w1 : FrameTimeSummary::kNA;
 	s.low01Fps = w01 > 0 ? 1000.0 / w01 : FrameTimeSummary::kNA;
+
+	// GQI's time-weighted 1% low: slowest first, until 1 % of the total time is covered.
+	const double target = sum * 0.01;
+	double acc = 0;
+	for (size_t i = n; i-- > 0;)
+	{
+		acc += v[i];
+		if (acc >= target || i == 0)
+		{
+			s.low1TimeFps = 1000.0 / v[i];
+			break;
+		}
+	}
+	const double avgFps = 1000.0 / s.avgMs;
+	if (std::isfinite(s.low1TimeFps) && avgFps > 0)
+		s.gqi = s.low1TimeFps * s.low1TimeFps / (60.0 * avgFps);
 	return s;
 }
 

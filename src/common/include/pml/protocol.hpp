@@ -102,6 +102,7 @@ enum OverlayPanel : uint32_t
 	kPanelDropped = 1u << 6,         // dropped (not displayed) frames
 	kPanelVrr = 1u << 7,             // VRR stability score and verdict (pml/metrics/vrr.hpp)
 	kPanelCap = 1u << 8,             // frame cap: target, method, wait per frame
+	kPanelExperience = 1u << 9,      // experience score and verdict (pml/metrics/experience.hpp)
 };
 
 // FrameRecord::flags

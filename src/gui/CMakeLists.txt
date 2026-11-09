@@ -59,6 +59,7 @@ qt_add_qml_module(pml_gui
 		qml/CompareTable.qml
 		qml/Histogram.qml
 		qml/VrrPanel.qml
+		qml/ExperiencePanel.qml
 		qml/FrameCapControls.qml
 		qml/Fmt.qml)
 target_include_directories(pml_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/backend)

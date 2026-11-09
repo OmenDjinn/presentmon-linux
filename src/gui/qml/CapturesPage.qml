@@ -317,8 +317,9 @@ Kirigami.Page {
                             label: "1% LOW"
                             value: Fmt.fps(single.a ? single.a.low1Fps : NaN)
                             unit: "fps"
-                            detail: "0.1% low " + Fmt.fps(single.a ? single.a.low01Fps : NaN) + " fps"
-                            toolTip: "Frame rate of the average of the slowest 1 % (0.1 %) of the frames."
+                            detail: "0.1% low " + Fmt.fps(single.a ? single.a.low01Fps : NaN) + " fps, GQI "
+                                    + Fmt.num(single.a ? single.a.gqi : NaN, 2)
+                            toolTip: "Frame rate of the average of the slowest 1 % (0.1 %) of the frames. %1".arg("Gaming Quality Index (Blackbird PC Tech): (1% low / 60) x (1 - (average - 1% low) / average). 1 or more: 1% lows at 60 fps or better, with little spread. Its 1% low is time-weighted (the frame at which the slowest frames add up to 1 % of the time), so it can differ from the 1% low shown here.")
                         }
                         StatTile {
                             Layout.fillWidth: true
@@ -355,6 +356,16 @@ Kirigami.Page {
                         cause: single.a ? single.a.vrrCause : ""
                         detail: single.a ? single.a.vrrDetail : ""
                         source: "A recording does not say whether VRR was on; judged as if it were."
+                    }
+
+                    ExperiencePanel {
+                        Layout.fillWidth: true
+                        visible: single.a && single.a.loaded && single.a.hasDisplay
+                        score: single.a ? single.a.experienceScore : -1
+                        verdict: single.a ? single.a.experienceVerdict : ""
+                        cause: single.a ? single.a.experienceCause : ""
+                        detail: single.a ? single.a.experienceDetail : ""
+                        source: "Judder and latency need the MsAnimationError and display latency columns; without them those terms count 0."
                     }
 
                     ChartPanel {

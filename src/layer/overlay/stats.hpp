@@ -9,6 +9,7 @@
 #pragma once
 
 #include <pml/metrics/engine.hpp>
+#include <pml/metrics/experience.hpp>
 #include <pml/metrics/vrr.hpp>
 #include <pml/protocol.hpp>
 
@@ -44,6 +45,7 @@ struct Snapshot
 	double p99Ms = kNA;        // 99th percentile MsBetweenPresents
 	double low1Fps = kNA;      // fps of the mean of the slowest 1 % of frames
 	double low01Fps = kNA;     // same for 0.1 %
+	double gqi = kNA;          // Gaming Quality Index (pml/metrics/summary.hpp)
 	double cpuBusyMs = kNA;
 	double cpuWaitMs = kNA;
 	double gpuBusyMs = kNA;         // PresentMon MsGPUBusy (union of the frame's GPU work), NA without GPU timing
@@ -56,6 +58,7 @@ struct Snapshot
 	uint32_t droppedCount = 0;
 	uint32_t displayKnownCount = 0;
 	pml::metrics::VrrVerdict vrr;   // displayed frames of the long window (state NoData without display info)
+	pml::metrics::ExperienceVerdict experience;   // the same frames (score -1 without display info)
 	uint64_t rowsTotal = 0;         // rows produced by the engine so far
 	float graphPresent[kGraphPoints] = {};  // MsBetweenPresents, max per bucket, oldest first, 0 = no data
 	float graphDisplay[kGraphPoints] = {};  // MsBetweenDisplayChange
@@ -88,6 +91,7 @@ struct DisplaySample
 	float displayLatencyMs = 0;
 	float readyToScreenMs = -1;  // < 0: not available
 	float betweenPresentsMs = 0; // the game's frame interval of the same frame (for the VRR verdict)
+	float animationErrorMs = std::numeric_limits<float>::quiet_NaN();  // MsAnimationError; NaN = not available
 };
 
 class OverlayStats
@@ -149,6 +153,7 @@ private:
 	std::deque<DisplaySample> displayed_;
 	pml::metrics::VrrContext vrrContext_;
 	std::vector<pml::metrics::VrrFrame> vrrScratch_;
+	std::vector<pml::metrics::ExperienceFrame> experienceScratch_;
 	struct Bucket
 	{
 		int64_t id = -1;

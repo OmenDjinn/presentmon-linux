@@ -37,25 +37,29 @@ bool same(double a, double b) { return a == b || (std::isnan(a) && std::isnan(b)
 struct Numbers
 {
 	bool valid = false, idle = false, hasDisplayInfo = false;
-	double presentFps = kNaN, displayFps = kNaN, avgMs = kNaN, p99Ms = kNaN, low1Fps = kNaN, low01Fps = kNaN;
+	double presentFps = kNaN, displayFps = kNaN, avgMs = kNaN, p99Ms = kNaN, low1Fps = kNaN, low01Fps = kNaN, gqi = kNaN;
 	double cpuBusyMs = kNaN, cpuWaitMs = kNaN, displayLatencyMs = kNaN, untilDisplayedMs = kNaN;
 	double gpuBusyMs = kNaN, gpuWaitMs = kNaN, gpuLatencyMs = kNaN;
 	double readyToScreenMs = kNaN, droppedPct = kNaN;
 	qulonglong lost = 0;
 	int vrrScore = -1;
 	QString vrrState, vrrVerdict, vrrCause, vrrDetail, vrrSource;
+	int experienceScore = -1;
+	QString experienceVerdict, experienceCause, experienceDetail;
 
 	bool operator==(const Numbers &o) const
 	{
 		return valid == o.valid && idle == o.idle && hasDisplayInfo == o.hasDisplayInfo && lost == o.lost &&
 		       same(presentFps, o.presentFps) && same(displayFps, o.displayFps) && same(avgMs, o.avgMs) &&
-		       same(p99Ms, o.p99Ms) && same(low1Fps, o.low1Fps) && same(low01Fps, o.low01Fps) &&
+		       same(p99Ms, o.p99Ms) && same(low1Fps, o.low1Fps) && same(low01Fps, o.low01Fps) && same(gqi, o.gqi) &&
 		       same(cpuBusyMs, o.cpuBusyMs) && same(cpuWaitMs, o.cpuWaitMs) && same(gpuBusyMs, o.gpuBusyMs) &&
 		       same(gpuWaitMs, o.gpuWaitMs) && same(gpuLatencyMs, o.gpuLatencyMs) &&
 		       same(displayLatencyMs, o.displayLatencyMs) && same(untilDisplayedMs, o.untilDisplayedMs) &&
 		       same(readyToScreenMs, o.readyToScreenMs) && same(droppedPct, o.droppedPct) && vrrScore == o.vrrScore &&
 		       vrrState == o.vrrState && vrrVerdict == o.vrrVerdict && vrrCause == o.vrrCause &&
-		       vrrDetail == o.vrrDetail && vrrSource == o.vrrSource;
+		       vrrDetail == o.vrrDetail && vrrSource == o.vrrSource && experienceScore == o.experienceScore &&
+		       experienceVerdict == o.experienceVerdict && experienceCause == o.experienceCause &&
+		       experienceDetail == o.experienceDetail;
 	}
 };
 
@@ -71,6 +75,7 @@ Numbers fromSnapshot(const Snapshot &s)
 	n.p99Ms = s.p99Ms;
 	n.low1Fps = s.low1Fps;
 	n.low01Fps = s.low01Fps;
+	n.gqi = s.gqi;
 	n.cpuBusyMs = s.cpuBusyMs;
 	n.cpuWaitMs = s.cpuWaitMs;
 	n.gpuBusyMs = s.gpuBusyMs;
@@ -80,6 +85,11 @@ Numbers fromSnapshot(const Snapshot &s)
 	n.untilDisplayedMs = s.untilDisplayedMs;
 	n.readyToScreenMs = s.readyToScreenMs;
 	n.droppedPct = s.droppedPct;
+	const pml::metrics::ExperienceVerdict &e = s.experience;
+	n.experienceScore = e.score;
+	n.experienceVerdict = QString::fromLatin1(pml::metrics::experienceVerdictLabel(e.score));
+	n.experienceCause = QString::fromLatin1(pml::metrics::experienceCauseLabel(e.cause));
+	n.experienceDetail = QString::fromStdString(pml::metrics::experienceDetail(e));
 	const pml::metrics::VrrVerdict &v = s.vrr;
 	n.vrrScore = v.score;
 	n.vrrState = QString::fromLatin1(pml::metrics::vrrStateLabel(v.state));
@@ -419,6 +429,7 @@ double LiveSession::avgMs() const { return d_->numbers.avgMs; }
 double LiveSession::p99Ms() const { return d_->numbers.p99Ms; }
 double LiveSession::low1Fps() const { return d_->numbers.low1Fps; }
 double LiveSession::low01Fps() const { return d_->numbers.low01Fps; }
+double LiveSession::gqi() const { return d_->numbers.gqi; }
 double LiveSession::cpuBusyMs() const { return d_->numbers.cpuBusyMs; }
 double LiveSession::gpuBusyMs() const { return d_->numbers.gpuBusyMs; }
 double LiveSession::gpuWaitMs() const { return d_->numbers.gpuWaitMs; }
@@ -454,6 +465,10 @@ QString LiveSession::vrrVerdict() const { return d_->numbers.vrrVerdict; }
 QString LiveSession::vrrCause() const { return d_->numbers.vrrCause; }
 QString LiveSession::vrrDetail() const { return d_->numbers.vrrDetail; }
 QString LiveSession::vrrSource() const { return d_->numbers.vrrSource; }
+int LiveSession::experienceScore() const { return d_->numbers.experienceScore; }
+QString LiveSession::experienceVerdict() const { return d_->numbers.experienceVerdict; }
+QString LiveSession::experienceCause() const { return d_->numbers.experienceCause; }
+QString LiveSession::experienceDetail() const { return d_->numbers.experienceDetail; }
 
 void LiveSession::tick() { step(pml::monotonicNs()); }
 

@@ -42,6 +42,7 @@ class CaptureAnalysis : public QObject
 	Q_PROPERTY(double p99Ms READ p99Ms NOTIFY loadedChanged)
 	Q_PROPERTY(double low1Fps READ low1Fps NOTIFY loadedChanged)
 	Q_PROPERTY(double low01Fps READ low01Fps NOTIFY loadedChanged)
+	Q_PROPERTY(double gqi READ gqi NOTIFY loadedChanged)
 	Q_PROPERTY(bool hasDisplay READ hasDisplay NOTIFY loadedChanged)
 	Q_PROPERTY(double displayFps READ displayFps NOTIFY loadedChanged)
 	Q_PROPERTY(double droppedPct READ droppedPct NOTIFY loadedChanged)
@@ -51,6 +52,11 @@ class CaptureAnalysis : public QObject
 	Q_PROPERTY(QString vrrVerdict READ vrrVerdict NOTIFY loadedChanged)
 	Q_PROPERTY(QString vrrCause READ vrrCause NOTIFY loadedChanged)
 	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY loadedChanged)
+	// Experience score (pml/metrics/experience.hpp) over the same frames.
+	Q_PROPERTY(int experienceScore READ experienceScore NOTIFY loadedChanged)           // 0-100, -1 = none
+	Q_PROPERTY(QString experienceVerdict READ experienceVerdict NOTIFY loadedChanged)   // "smooth" ... "very rough"
+	Q_PROPERTY(QString experienceCause READ experienceCause NOTIFY loadedChanged)       // main cause, "" from 85 up
+	Q_PROPERTY(QString experienceDetail READ experienceDetail NOTIFY loadedChanged)     // the numbers behind the score
 
 	// x = seconds since the first frame, y = ms.
 	Q_PROPERTY(FrameSeries *frameTimes READ frameTimes CONSTANT)
@@ -84,6 +90,7 @@ public:
 	double p99Ms() const;
 	double low1Fps() const;
 	double low01Fps() const;
+	double gqi() const;
 	bool hasDisplay() const;
 	double displayFps() const;
 	double droppedPct() const;
@@ -92,6 +99,10 @@ public:
 	QString vrrVerdict() const;
 	QString vrrCause() const;
 	QString vrrDetail() const;
+	int experienceScore() const;
+	QString experienceVerdict() const;
+	QString experienceCause() const;
+	QString experienceDetail() const;
 	FrameSeries *frameTimes() const;
 	FrameSeries *displayTimes() const;
 	QList<double> histogram() const;

@@ -63,7 +63,7 @@ std::string snapshotSummary(const Snapshot &s, bool displayTiming)
 	const bool d = displayTiming && s.hasDisplayInfo;
 	std::string out = "present_fps=" + f(s.presentFps, "%.1f") + " shown_fps=" + f(d ? s.displayFps : kNA, "%.1f") +
 	                  " avg_ms=" + f(s.avgMs, "%.2f") + " p99_ms=" + f(s.p99Ms, "%.2f") +
-	                  " low1_fps=" + f(s.low1Fps, "%.1f") + " low01_fps=" + f(s.low01Fps, "%.1f") +
+	                  " low1_fps=" + f(s.low1Fps, "%.1f") + " low01_fps=" + f(s.low01Fps, "%.1f") + " gqi=" + f(s.gqi, "%.2f") +
 	                  " cpu_busy_ms=" + f(s.cpuBusyMs, "%.2f") + " cpu_wait_ms=" + f(s.cpuWaitMs, "%.2f") +
 	                  " gpu_busy_ms=" + f(s.gpuBusyMs, "%.2f") + " gpu_wait_ms=" + f(s.gpuWaitMs, "%.2f") +
 	                  " gpu_latency_ms=" + f(s.gpuLatencyMs, "%.2f") +
@@ -72,6 +72,7 @@ std::string snapshotSummary(const Snapshot &s, bool displayTiming)
 	                  " ready_to_screen_ms=" + f(d ? s.readyToScreenMs : kNA, "%.2f") +
 	                  " dropped_pct=" + f(d ? s.droppedPct : kNA, "%.1f") +
 	                  " vrr_state=" + pml::metrics::vrrStateLabel(s.vrr.state) + " vrr_score=" + std::to_string(s.vrr.score) +
+	                  " experience_score=" + std::to_string(s.experience.score) +
 	                  " rows=" + std::to_string(s.rowsTotal);
 	return out;
 }
@@ -156,6 +157,10 @@ void drawOverlayUi(const UiParams &p)
 		value(V(s.low1Fps), "%6.1f", "");
 		label("  0.1% ");
 		value(V(s.low01Fps), "%6.1f", " fps");
+
+		// Gaming Quality Index: 1% low^2 / (60 * average fps); >= 1 means 1% lows at 60 fps or more, steady.
+		label("GQI   ", true);
+		value(V(s.gqi), "%6.2f", "");
 	}
 
 	if (p.panels & pml::kPanelFrameTimeGraph)
@@ -286,6 +291,34 @@ void drawOverlayUi(const UiParams &p)
 			{
 				label("      ", true);
 				part(kLabel, pml::metrics::vrrCauseLabel(v.cause));
+			}
+		}
+	}
+
+	if (p.panels & pml::kPanelExperience)
+	{
+		// "Exp    92/100  smooth", and the main cause below it when under 85 ("Exp    61/100  rough" / "stutters").
+		const pml::metrics::ExperienceVerdict &e = s.experience;
+		label("Exp   ", true);
+		if (!have || !s.hasDisplayInfo || e.score < 0)
+		{
+			value(na, "", "");
+			if (have && !s.hasDisplayInfo)
+				part(kLabel, "  needs display times");
+		}
+		else
+		{
+			const ImU32 col = e.score >= 85 ? kValue : kWarn;
+			char buf[16];
+			std::snprintf(buf, sizeof(buf), "%3d", e.score);
+			part(kLabel, "      ");
+			part(col, buf);
+			part(kLabel, "/100  ");
+			part(col, pml::metrics::experienceVerdictLabel(e.score));
+			if (e.cause != pml::metrics::ExperienceCause::None)
+			{
+				label("      ", true);
+				part(kLabel, pml::metrics::experienceCauseLabel(e.cause));
 			}
 		}
 	}

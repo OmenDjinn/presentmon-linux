@@ -3,6 +3,7 @@
 
 #include "csvreader.hpp"
 
+#include <pml/metrics/experience.hpp>
 #include <pml/metrics/vrr.hpp>
 
 #include <QCoreApplication>
@@ -30,6 +31,7 @@ struct LoadResult
 	pml::gui::CaptureData data;
 	pml::gui::CaptureStats stats;
 	pml::metrics::VrrVerdict vrr;
+	pml::metrics::ExperienceVerdict experience;
 	QList<double> histogram;
 	double binMs = 1;
 	QList<QPointF> framePoints;
@@ -74,6 +76,12 @@ LoadResult loadOrThrow(const std::string &path, const std::atomic<bool> &cancel)
 		for (size_t i = 0; i < frames.size(); i++)
 			frames[i] = {r.data.frameMs[i], i < r.data.displayMs.size() ? r.data.displayMs[i] : 0.0f};
 		r.vrr = pml::metrics::analyzeVrr(frames);
+
+		std::vector<pml::metrics::ExperienceFrame> xp(r.data.displayMs.size());
+		for (size_t i = 0; i < xp.size(); i++)
+			xp[i] = {r.data.displayMs[i], i < r.data.animationErrorMs.size() ? r.data.animationErrorMs[i] : NAN,
+			         i < r.data.latencyMs.size() ? r.data.latencyMs[i] : NAN};
+		r.experience = pml::metrics::analyzeExperience(xp);
 	}
 
 	// Cover the usual frames: up to 1.5 x p99 (at least 2 x the median), but no further than 4 x the
@@ -144,6 +152,7 @@ struct CaptureAnalysis::Impl
 	pml::gui::CaptureData data;
 	pml::gui::CaptureStats stats;
 	pml::metrics::VrrVerdict vrr;
+	pml::metrics::ExperienceVerdict experience;
 	QList<double> histogram;
 	double binMs = 1;
 };
@@ -180,6 +189,7 @@ void CaptureAnalysis::setPath(const QString &path)
 	d_->data = {};
 	d_->stats = {};
 	d_->vrr = {};
+	d_->experience = {};
 	d_->histogram.clear();
 	d_->binMs = 1;
 	d_->frameTimes.clear();
@@ -218,6 +228,7 @@ void CaptureAnalysis::setPath(const QString &path)
 			d_->data = std::move(r.data);
 			d_->stats = r.stats;
 			d_->vrr = r.vrr;
+			d_->experience = r.experience;
 			d_->histogram = std::move(r.histogram);
 			d_->binMs = r.binMs;
 			d_->frameTimes.setPoints(std::move(r.framePoints));
@@ -261,6 +272,7 @@ double CaptureAnalysis::p95Ms() const { return d_->loaded ? d_->stats.times.p95M
 double CaptureAnalysis::p99Ms() const { return d_->loaded ? d_->stats.times.p99Ms : kNaN; }
 double CaptureAnalysis::low1Fps() const { return d_->loaded ? d_->stats.times.low1Fps : kNaN; }
 double CaptureAnalysis::low01Fps() const { return d_->loaded ? d_->stats.times.low01Fps : kNaN; }
+double CaptureAnalysis::gqi() const { return d_->loaded ? d_->stats.times.gqi : kNaN; }
 bool CaptureAnalysis::hasDisplay() const { return d_->loaded && d_->data.hasDisplay; }
 double CaptureAnalysis::displayFps() const { return hasDisplay() ? d_->stats.displayFps : kNaN; }
 double CaptureAnalysis::droppedPct() const { return hasDisplay() ? d_->stats.droppedPct : kNaN; }
@@ -278,6 +290,19 @@ QString CaptureAnalysis::vrrDetail() const
 	    .arg(v.unevenDisplayPct, 0, 'f', 1)
 	    .arg(v.stutterPct, 0, 'f', 1)
 	    .arg(qulonglong(v.frames));
+}
+int CaptureAnalysis::experienceScore() const { return d_->experience.score; }
+QString CaptureAnalysis::experienceVerdict() const
+{
+	return QString::fromLatin1(pml::metrics::experienceVerdictLabel(d_->experience.score));
+}
+QString CaptureAnalysis::experienceCause() const
+{
+	return QString::fromLatin1(pml::metrics::experienceCauseLabel(d_->experience.cause));
+}
+QString CaptureAnalysis::experienceDetail() const
+{
+	return QString::fromStdString(pml::metrics::experienceDetail(d_->experience));
 }
 FrameSeries *CaptureAnalysis::frameTimes() const { return &d_->frameTimes; }
 FrameSeries *CaptureAnalysis::displayTimes() const { return &d_->displayTimes; }

@@ -173,6 +173,10 @@ Environment (set on the game):
 
 Runtime control from another terminal: `presentmon overlay toggle` (or show/hide/status, `--position`, `--scale`).
 
+Two scores on the overlay and in the GUI, both out of 100 with a verdict and a main cause: **VRR** (how evenly frames
+reach a VRR screen) and **Exp** (experience: frame rate shown, judder, stutters and latency together; how it is built
+and validated: `docs/ARCHITECTURE.md` 3.4.3). The FPS section also shows Blackbird PC Tech's GQI next to the lows.
+
 ### Global shortcut in KDE (instructions, not configured)
 
 System Settings > Keyboard > Shortcuts > Add New > Command or Script. Enter the command

@@ -197,8 +197,8 @@ Kirigami.Page {
                         label: "1% LOW"
                         value: Fmt.fps(live.low1Fps)
                         unit: "fps"
-                        detail: "0.1% low " + Fmt.fps(live.low01Fps) + " fps"
-                        toolTip: "Frame rate of the average of the slowest 1 % (0.1 %) of the frames of the last 10 s."
+                        detail: "0.1% low " + Fmt.fps(live.low01Fps) + " fps, GQI " + Fmt.num(live.gqi, 2)
+                        toolTip: "Frame rate of the average of the slowest 1 % (0.1 %) of the frames of the last 10 s. %1".arg("Gaming Quality Index (Blackbird PC Tech): (1% low / 60) x (1 - (average - 1% low) / average). 1 or more: 1% lows at 60 fps or better, with little spread. Its 1% low is time-weighted (the frame at which the slowest frames add up to 1 % of the time), so it can differ from the 1% low shown here.")
                     }
                     StatTile {
                         Layout.fillWidth: true
@@ -258,6 +258,18 @@ Kirigami.Page {
                     cause: live.vrrCause
                     detail: live.vrrDetail
                     source: live.vrrSource
+                }
+
+                ExperiencePanel {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing * 2
+                    Layout.rightMargin: Kirigami.Units.largeSpacing * 2
+                    visible: live.hasDisplayInfo
+                    score: live.experienceScore
+                    verdict: live.experienceVerdict
+                    cause: live.experienceCause
+                    detail: live.experienceDetail
+                    source: "Last 10 s of displayed frames. How the score is built: docs/ARCHITECTURE.md, 3.4.3."
                 }
 
                 ChartPanel {

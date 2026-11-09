@@ -18,6 +18,8 @@ GridLayout {
         { label: "Average frame rate", key: "avgFps", unit: "fps", higher: true, kind: "fps" },
         { label: "1% low", key: "low1Fps", unit: "fps", higher: true, kind: "fps" },
         { label: "0.1% low", key: "low01Fps", unit: "fps", higher: true, kind: "fps" },
+        { label: "Experience score", key: "experienceScore", unit: "/ 100", higher: true, kind: "score" },
+        { label: "Gaming Quality Index", key: "gqi", unit: "", higher: true, kind: "num" },
         { label: "Average frame time", key: "avgMs", unit: "ms", higher: false, kind: "ms" },
         { label: "95th percentile", key: "p95Ms", unit: "ms", higher: false, kind: "ms" },
         { label: "99th percentile", key: "p99Ms", unit: "ms", higher: false, kind: "ms" },
@@ -33,6 +35,8 @@ GridLayout {
         if (kind === "ms") return Fmt.ms(v)
         if (kind === "pct") return Fmt.pct(v)
         if (kind === "duration") return Fmt.duration(v)
+        if (kind === "num") return Fmt.num(v, 2)
+        if (kind === "score") return v >= 0 ? String(v) : Fmt.na
         return isNaN(v) ? Fmt.na : Number(v).toLocaleString(Qt.locale(), "f", 0)
     }
 

@@ -262,7 +262,8 @@ TEST(ProcessModel, OverlaySettersReachTheProducerSide)
 	EXPECT_EQ(pml::readOverlayControl(p.segment()).panels, 0u);
 	// Unknown bits are masked off: only the panels the overlay knows reach the shared control block.
 	const uint32_t known = pml::kPanelFps | pml::kPanelFrameTimeGraph | pml::kPanelCpu | pml::kPanelGpu |
-	                       pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr | pml::kPanelCap;
+	                       pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr | pml::kPanelCap |
+	                       pml::kPanelExperience;
 	EXPECT_TRUE(model.setOverlayPanels(pid, 0x7fffffff));
 	EXPECT_EQ(pml::readOverlayControl(p.segment()).panels, known);
 	EXPECT_TRUE(model.setOverlayPanels(pid, 0));
