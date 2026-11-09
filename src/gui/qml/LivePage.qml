@@ -247,6 +247,19 @@ Kirigami.Page {
                     }
                 }
 
+                VrrPanel {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: Kirigami.Units.largeSpacing * 2
+                    Layout.rightMargin: Kirigami.Units.largeSpacing * 2
+                    visible: live.hasDisplayInfo
+                    score: live.vrrScore
+                    state_: live.vrrState
+                    verdict: live.vrrVerdict
+                    cause: live.vrrCause
+                    detail: live.vrrDetail
+                    source: live.vrrSource
+                }
+
                 ChartPanel {
                     Layout.fillWidth: true
                     Layout.preferredHeight: Kirigami.Units.gridUnit * 16

@@ -65,10 +65,14 @@ std::string snapshotSummary(const Snapshot &s, bool displayTiming)
 	                  " avg_ms=" + f(s.avgMs, "%.2f") + " p99_ms=" + f(s.p99Ms, "%.2f") +
 	                  " low1_fps=" + f(s.low1Fps, "%.1f") + " low01_fps=" + f(s.low01Fps, "%.1f") +
 	                  " cpu_busy_ms=" + f(s.cpuBusyMs, "%.2f") + " cpu_wait_ms=" + f(s.cpuWaitMs, "%.2f") +
-	                  " gpu_busy=NA display_latency_ms=" + f(d ? s.displayLatencyMs : kNA, "%.2f") +
+	                  " gpu_busy_ms=" + f(s.gpuBusyMs, "%.2f") + " gpu_wait_ms=" + f(s.gpuWaitMs, "%.2f") +
+	                  " gpu_latency_ms=" + f(s.gpuLatencyMs, "%.2f") +
+	                  " display_latency_ms=" + f(d ? s.displayLatencyMs : kNA, "%.2f") +
 	                  " until_displayed_ms=" + f(d ? s.untilDisplayedMs : kNA, "%.2f") +
 	                  " ready_to_screen_ms=" + f(d ? s.readyToScreenMs : kNA, "%.2f") +
-	                  " dropped_pct=" + f(d ? s.droppedPct : kNA, "%.1f") + " rows=" + std::to_string(s.rowsTotal);
+	                  " dropped_pct=" + f(d ? s.droppedPct : kNA, "%.1f") +
+	                  " vrr_state=" + pml::metrics::vrrStateLabel(s.vrr.state) + " vrr_score=" + std::to_string(s.vrr.score) +
+	                  " rows=" + std::to_string(s.rowsTotal);
 	return out;
 }
 
@@ -242,6 +246,47 @@ void drawOverlayUi(const UiParams &p)
 		else
 		{
 			value(na, "", "");
+		}
+	}
+
+	if (p.panels & pml::kPanelVrr)
+	{
+		// "VRR   on    43/100  unstable" (on / ? / idle) and the main cause below it; "VRR   off   fixed 120 Hz".
+		// In the game the driver's VRR state is unknown: "on" only when the screen visibly follows the game
+		// off a known refresh grid, "off" when it visibly snaps to one, "?" when it cannot be told.
+		using pml::metrics::VrrState;
+		const pml::metrics::VrrVerdict &v = s.vrr;
+		label("VRR   ", true);
+		if (!have || !s.hasDisplayInfo || v.state == VrrState::NoData)
+		{
+			value(na, "", "");
+			if (have && !s.hasDisplayInfo)
+				part(kLabel, "  needs display times");
+		}
+		else if (v.state == VrrState::Off)
+		{
+			part(kWarn, "off");
+			if (!isNA(v.refreshHz))
+			{
+				char buf[32];
+				std::snprintf(buf, sizeof(buf), "   fixed %.0f Hz", v.refreshHz);
+				part(kLabel, buf);
+			}
+		}
+		else
+		{
+			part(kLabel, v.state == VrrState::Active ? "on    " : v.state == VrrState::Idle ? "idle  " : "?     ");
+			const ImU32 col = v.score >= 85 ? kValue : kWarn;
+			char buf[16];
+			std::snprintf(buf, sizeof(buf), "%3d", v.score);
+			part(col, buf);
+			part(kLabel, "/100  ");
+			part(col, v.state == VrrState::Idle ? "at refresh cap" : pml::metrics::vrrVerdictLabel(v.score));
+			if (v.cause != pml::metrics::VrrCause::None && v.state != VrrState::Idle)
+			{
+				label("      ", true);
+				part(kLabel, pml::metrics::vrrCauseLabel(v.cause));
+			}
 		}
 	}
 

@@ -277,7 +277,7 @@ Zero means "missing" throughout PresentMon's code, so a real timestamp must neve
 - Numbers come from the **same PresentMon metrics code as the CSV**: the layer runs `UnifiedSwapChain` on its own
   finished records, in-process, and keeps rolling windows (fps, frame time graph, 1%/0.1% lows, CPU busy/wait,
   display latency, dropped frames, GPU busy/wait and GPU latency on a line of its own; GPU numbers show NA
-  when fewer than half the frames of the last second have GPU data).
+  when fewer than half the frames of the last second have GPU data; the VRR verdict, 3.4.1).
 - Visible by default when the layer is enabled. Env: `PRESENTMON_OVERLAY=1` (visible, default), `0` (loaded but
   hidden, can be shown from the CLI) or `off` (not loaded, swapchain untouched). Only `off` leaves the swapchain
   exactly as the app created it: `0` still adds `COLOR_ATTACHMENT` usage, because usage is fixed at creation and
@@ -308,6 +308,28 @@ Zero means "missing" throughout PresentMon's code, so a real timestamp must neve
 - Costs: swapchain gets `COLOR_ATTACHMENT` usage, and one small render pass per present while visible. The overlay's
   GPU work lands after the app's work, so it is inside `readyTime` but outside the app's GPU busy time (its
   submissions go down below the layer's hooks).
+
+### 3.4.1 VRR stability verdict (`src/metrics/include/pml/metrics/vrr.hpp`)
+One analyzer, used by the overlay (last 10 s of displayed frames), the GUI's Live page (the same, plus the
+driver's VRR state) and its Captures page (a whole CSV). Per pair of consecutive displayed frames it looks at the
+time between screen updates and the game's own frame interval:
+- **Uneven**: the screen spacing jumps by more than max(2 ms, 25 % of its median); "on screen only" when the
+  game's interval stayed within half that. Under VRR each jump is a refresh-rate jump (the cause of VRR flicker
+  on OLED/VA panels). **Stutter**: a frame on screen more than 2.5x the median (weighs 3). **LFC crossing**:
+  the spacing crosses the panel's lowest VRR rate (weighs 3; needs the EDID range).
+- Score = 100 * exp(-weighted events per pair / 0.25); >= 85 stable, >= 65 minor jitter, >= 40 unstable.
+  No published standard exists; the 2 ms floor keeps the game's normal sub-millisecond variation out (Lies of P
+  at 165 fps: its own interval jumped > 1.2 ms 13 % of the time, the screen's > 2 ms 21 % against 4 %).
+- State first: **off** when the driver says so or when screen updates snap to a refresh grid while the game's
+  intervals do not (the lowest common rate that explains it when the output's is unknown, so the overlay finds
+  "fixed 120 Hz" by itself); **idle** when the game runs at or above the refresh rate; **active**; **unknown**
+  when it cannot be told (the game itself on the grid, e.g. FIFO at the refresh rate): then the score is shown
+  with "?".
+- The GUI reads, read-only through libdrm (`backend/drmvrr.cpp`), each connected output's CRTC `VRR_ENABLED`,
+  mode refresh and EDID range descriptor. KWin enables VRR only for the active fullscreen window, so the one
+  output with VRR on is the game's; none on = VRR off (e.g. the game is not the active window).
+- In the overlay the driver's state is unknown (the game process would need DRM ioctls on its present thread);
+  it shows on / ? / idle / off from the data.
 
 ### 3.5 `presentmon-gui` (`src/gui/`)
 A Qt 6 Quick + Kirigami app (C++23) in the same tree: one QML module `PresentMon` (static library `pml_gui`: the C++

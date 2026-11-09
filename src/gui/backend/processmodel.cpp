@@ -19,7 +19,7 @@ constexpr uint64_t kIdleAfterNs = 1'500'000'000;   // no heartbeat for this long
 // baseline stays where it was.
 constexpr uint64_t kMinRateWindowNs = 100'000'000;
 constexpr uint32_t kAllPanels = pml::kPanelFps | pml::kPanelFrameTimeGraph | pml::kPanelCpu | pml::kPanelGpu |
-                                pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped;
+                                pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr;
 
 } // namespace
 

@@ -182,6 +182,30 @@ TEST(Stats, GpuNumbersArePresentMonsGpuMetrics)
 	EXPECT_NEAR(s.gpuLatencyMs, 8.333333 - 0.1 - 2.0, 1e-3);
 }
 
+TEST(Stats, VrrVerdictFromTheDisplayedFrames)
+{
+	// Steady presents every 6 ms. First shown evenly, then every tenth frame 3 ms late (the screen waits,
+	// then catches up), as Lies of P under vkd3d-proton showed with VRR on.
+	auto run = [](bool uneven) {
+		OverlayStats stats(makeInfo(), 1, kT0);
+		const uint64_t period = 6'000'000;
+		for (uint64_t n = 1; n <= 1200; n++)
+			stats.push(frame(n, period, (uneven && n % 10 == 0) ? 7'000'000 : 4'000'000));
+		pml::metrics::VrrContext ctx;
+		ctx.refreshHz = 240;
+		ctx.driver = pml::metrics::DriverVrr::On;
+		stats.setVrrContext(ctx);
+		stats.update(kT0 + 1200 * period + 20'000'000);
+		return stats.snapshot().vrr;
+	};
+	const pml::metrics::VrrVerdict even = run(false);
+	EXPECT_EQ(even.state, pml::metrics::VrrState::Active);
+	EXPECT_GE(even.score, 95);
+	const pml::metrics::VrrVerdict bad = run(true);
+	EXPECT_LT(bad.score, 65);
+	EXPECT_EQ(bad.cause, pml::metrics::VrrCause::Display);
+}
+
 TEST(Stats, IdleWhenNothingArrives)
 {
 	OverlayStats stats(makeInfo(), 1, kT0);

@@ -13,7 +13,12 @@
 
 #include <QObject>
 #include <QString>
+#include "drmvrr.hpp"
+
 #include <QTimer>
+
+#include <functional>
+#include <vector>
 #include <QtQml/qqmlregistration.h>
 
 #include <cstdint>
@@ -54,6 +59,13 @@ class LiveSession : public QObject
 	Q_PROPERTY(double readyToScreenMs READ readyToScreenMs NOTIFY statsChanged)
 	Q_PROPERTY(double droppedPct READ droppedPct NOTIFY statsChanged)
 	Q_PROPERTY(qulonglong lostRecords READ lostRecords NOTIFY statsChanged)  // ring records overwritten before read
+	// VRR verdict (pml/metrics/vrr.hpp) over the last 10 s of displayed frames, with the driver's VRR state.
+	Q_PROPERTY(int vrrScore READ vrrScore NOTIFY statsChanged)            // 0-100, -1 = none
+	Q_PROPERTY(QString vrrState READ vrrState NOTIFY statsChanged)        // "no data", "unknown", "off", "idle", "active"
+	Q_PROPERTY(QString vrrVerdict READ vrrVerdict NOTIFY statsChanged)    // "stable" ... "very unstable", "" without score
+	Q_PROPERTY(QString vrrCause READ vrrCause NOTIFY statsChanged)        // main cause, "" when stable
+	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY statsChanged)      // the numbers behind the score
+	Q_PROPERTY(QString vrrSource READ vrrSource NOTIFY statsChanged)      // what the driver says, and where
 
 	// x = seconds since the session attached, y = ms. Trimmed to historySeconds.
 	Q_PROPERTY(FrameSeries *frameTimes READ frameTimes CONSTANT)    // MsBetweenPresents, one point per present
@@ -96,6 +108,12 @@ public:
 	double readyToScreenMs() const;
 	double droppedPct() const;
 	qulonglong lostRecords() const;
+	int vrrScore() const;
+	QString vrrState() const;
+	QString vrrVerdict() const;
+	QString vrrCause() const;
+	QString vrrDetail() const;
+	QString vrrSource() const;
 
 	FrameSeries *frameTimes() const;
 	FrameSeries *displayTimes() const;
@@ -107,6 +125,8 @@ public:
 
 	// Tests: one poll step now (reads the ring, updates stats and series) with a given clock.
 	void tickForTest(uint64_t nowNs);
+	// Tests: where the outputs' VRR state comes from (default: the DRM devices, readDrmOutputs()).
+	void setOutputSourceForTest(std::function<std::vector<pml::gui::OutputVrr>()> source);
 
 Q_SIGNALS:
 	void pidChanged();

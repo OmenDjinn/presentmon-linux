@@ -42,6 +42,8 @@ struct Numbers
 	double gpuBusyMs = kNaN, gpuWaitMs = kNaN, gpuLatencyMs = kNaN;
 	double readyToScreenMs = kNaN, droppedPct = kNaN;
 	qulonglong lost = 0;
+	int vrrScore = -1;
+	QString vrrState, vrrVerdict, vrrCause, vrrDetail, vrrSource;
 
 	bool operator==(const Numbers &o) const
 	{
@@ -51,7 +53,9 @@ struct Numbers
 		       same(cpuBusyMs, o.cpuBusyMs) && same(cpuWaitMs, o.cpuWaitMs) && same(gpuBusyMs, o.gpuBusyMs) &&
 		       same(gpuWaitMs, o.gpuWaitMs) && same(gpuLatencyMs, o.gpuLatencyMs) &&
 		       same(displayLatencyMs, o.displayLatencyMs) && same(untilDisplayedMs, o.untilDisplayedMs) &&
-		       same(readyToScreenMs, o.readyToScreenMs) && same(droppedPct, o.droppedPct);
+		       same(readyToScreenMs, o.readyToScreenMs) && same(droppedPct, o.droppedPct) && vrrScore == o.vrrScore &&
+		       vrrState == o.vrrState && vrrVerdict == o.vrrVerdict && vrrCause == o.vrrCause &&
+		       vrrDetail == o.vrrDetail && vrrSource == o.vrrSource;
 	}
 };
 
@@ -76,6 +80,22 @@ Numbers fromSnapshot(const Snapshot &s)
 	n.untilDisplayedMs = s.untilDisplayedMs;
 	n.readyToScreenMs = s.readyToScreenMs;
 	n.droppedPct = s.droppedPct;
+	const pml::metrics::VrrVerdict &v = s.vrr;
+	n.vrrScore = v.score;
+	n.vrrState = QString::fromLatin1(pml::metrics::vrrStateLabel(v.state));
+	n.vrrVerdict = QString::fromLatin1(pml::metrics::vrrVerdictLabel(v.score));
+	n.vrrCause = QString::fromLatin1(pml::metrics::vrrCauseLabel(v.cause));
+	if (v.state != pml::metrics::VrrState::NoData)
+	{
+		QString detail = QStringLiteral("Uneven frames %1 % (%2 % on screen only) · stutters %3 %")
+		                     .arg(v.unevenPct, 0, 'f', 1)
+		                     .arg(v.unevenDisplayPct, 0, 'f', 1)
+		                     .arg(v.stutterPct, 0, 'f', 1);
+		if (!std::isnan(v.lfcCrossings))
+			detail += QStringLiteral(" · LFC crossings %1").arg(int(v.lfcCrossings));
+		detail += QStringLiteral(" · %1 frames").arg(qulonglong(v.frames));
+		n.vrrDetail = detail;
+	}
 	return n;
 }
 
@@ -122,6 +142,9 @@ struct LiveSession::Impl
 	uint64_t candidateSince = 0;
 
 	Numbers numbers;
+	std::function<std::vector<pml::gui::OutputVrr>()> outputSource;
+	pml::metrics::VrrContext vrrContext;
+	QString vrrSource;
 	QString swapchain;
 	int swapchainCount = 0;
 	double refreshHz = kNaN;
@@ -202,6 +225,7 @@ Chain &LiveSession::Impl::chainFor(uint64_t serial)
 	if (!c.known)
 		c.info.serial = serial;   // the record outran the table (or it is full): unknown rather than lost
 	c.stats = std::make_unique<OverlayStats>(c.info, uint32_t(pid), attachNs);
+	c.stats->setVrrContext(vrrContext);
 	return chains.emplace(serial, std::move(c)).first->second;
 }
 
@@ -420,6 +444,16 @@ void LiveSession::clearHistory()
 }
 
 void LiveSession::tickForTest(uint64_t nowNs) { step(nowNs); }
+void LiveSession::setOutputSourceForTest(std::function<std::vector<pml::gui::OutputVrr>()> source)
+{
+	d_->outputSource = std::move(source);
+}
+int LiveSession::vrrScore() const { return d_->numbers.vrrScore; }
+QString LiveSession::vrrState() const { return d_->numbers.vrrState; }
+QString LiveSession::vrrVerdict() const { return d_->numbers.vrrVerdict; }
+QString LiveSession::vrrCause() const { return d_->numbers.vrrCause; }
+QString LiveSession::vrrDetail() const { return d_->numbers.vrrDetail; }
+QString LiveSession::vrrSource() const { return d_->numbers.vrrSource; }
 
 void LiveSession::tick() { step(pml::monotonicNs()); }
 
@@ -511,6 +545,28 @@ void LiveSession::step(uint64_t nowNs)
 		d.scanTable();
 		swapchainDirty = oldSwapchain != d.swapchain || oldCount != d.swapchainCount || !same(oldHz, d.refreshHz);
 		checkStale = true;
+
+		// The outputs' VRR state, for the verdict (twice a second: a handful of DRM ioctls).
+		const std::vector<pml::gui::OutputVrr> outputs = d.outputSource ? d.outputSource() : pml::gui::readDrmOutputs();
+		std::string which;
+		d.vrrContext = pml::gui::vrrContextFromOutputs(outputs, &which);
+		const auto range = [](const pml::gui::OutputVrr *o) {
+			return o && o->edidMinHz > 0 ? QStringLiteral(", %1–%2 Hz").arg(o->edidMinHz, 0, 'f', 0).arg(
+			                                   std::min(o->refreshHz > 0 ? o->refreshHz : o->edidMaxHz, o->edidMaxHz), 0, 'f', 0)
+			                             : QString();
+		};
+		const pml::gui::OutputVrr *used = nullptr;
+		for (const auto &o : outputs)
+			if (o.name == which)
+				used = &o;
+		if (d.vrrContext.driver == pml::metrics::DriverVrr::On)
+			d.vrrSource = QStringLiteral("Driver: VRR on, %1%2").arg(QString::fromStdString(which), range(used));
+		else if (d.vrrContext.driver == pml::metrics::DriverVrr::Off)
+			d.vrrSource = QStringLiteral("Driver: VRR off on every screen (KWin turns it on only for the active fullscreen window)");
+		else
+			d.vrrSource = QStringLiteral("Driver: VRR state not readable");
+		for (auto &[serial, c] : d.chains)
+			c.stats->setVrrContext(d.vrrContext);
 	}
 
 	const uint64_t before = d.followed;
@@ -593,6 +649,7 @@ void LiveSession::step(uint64_t nowNs)
 	Numbers n;
 	if (d.followed != 0)
 		n = fromSnapshot(d.chains.at(d.followed).stats->snapshot());
+	n.vrrSource = d.vrrSource;
 	n.lost = d.reader->lostRecords() - d.lostBase;
 	if (d.dead)
 		n.idle = true;

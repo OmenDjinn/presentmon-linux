@@ -100,6 +100,7 @@ enum OverlayPanel : uint32_t
 	kPanelLatency = 1u << 4,         // display latency, render-present latency, until-displayed
 	kPanelSwapchain = 1u << 5,       // runtime, present mode, size, format / HDR, timing stage
 	kPanelDropped = 1u << 6,         // dropped (not displayed) frames
+	kPanelVrr = 1u << 7,             // VRR stability score and verdict (pml/metrics/vrr.hpp)
 };
 
 // FrameRecord::flags

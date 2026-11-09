@@ -262,7 +262,7 @@ TEST(ProcessModel, OverlaySettersReachTheProducerSide)
 	EXPECT_EQ(pml::readOverlayControl(p.segment()).panels, 0u);
 	// Unknown bits are masked off: only the panels the overlay knows reach the shared control block.
 	const uint32_t known = pml::kPanelFps | pml::kPanelFrameTimeGraph | pml::kPanelCpu | pml::kPanelGpu |
-	                       pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped;
+	                       pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr;
 	EXPECT_TRUE(model.setOverlayPanels(pid, 0x7fffffff));
 	EXPECT_EQ(pml::readOverlayControl(p.segment()).panels, known);
 	EXPECT_TRUE(model.setOverlayPanels(pid, 0));
@@ -804,4 +804,74 @@ TEST(LiveSession, TimerDrivenAttachFollowsARealtimeProducer)
 	EXPECT_EQ(s.frameTimes()->count(), frozen);
 	s.setRunning(true);
 	ASSERT_TRUE(waitUntil([&] { p.pump(); return s.frameTimes()->count() != frozen; }));
+}
+
+// ---------------------------------------------------------------------------------------
+// VRR verdict: the outputs' driver state (drmvrr.hpp) and the session's numbers
+// ---------------------------------------------------------------------------------------
+
+TEST(DrmVrr, EdidRangeDescriptor)
+{
+	std::vector<uint8_t> edid(128, 0);
+	const uint8_t range[18] = {0, 0, 0, 0xFD, 0x02, 48, 245, 30, 255, 0};   // max 245 + 255 (flag bit 1)
+	std::copy(std::begin(range), std::end(range), edid.begin() + 72);
+	double lo = 0, hi = 0;
+	ASSERT_TRUE(pml::gui::edidVerticalRange(edid.data(), edid.size(), &lo, &hi));
+	EXPECT_EQ(lo, 48.0);
+	EXPECT_EQ(hi, 500.0);
+	EXPECT_FALSE(pml::gui::edidVerticalRange(edid.data(), 100, &lo, &hi)) << "truncated";
+	std::vector<uint8_t> none(128, 0);
+	EXPECT_FALSE(pml::gui::edidVerticalRange(none.data(), none.size(), &lo, &hi));
+}
+
+TEST(DrmVrr, TheOutputWithVrrOnIsTheGames)
+{
+	using pml::gui::OutputVrr;
+	const OutputVrr dp1{"DP-1", true, 0, 120.0, 48, 180};
+	OutputVrr dp2{"DP-2", true, 1, 239.991, 48, 500};
+	std::string which;
+	auto ctx = pml::gui::vrrContextFromOutputs({dp1, dp2}, &which);
+	EXPECT_EQ(ctx.driver, pml::metrics::DriverVrr::On);
+	EXPECT_EQ(which, "DP-2");
+	EXPECT_NEAR(ctx.refreshHz, 239.991, 1e-9);
+	EXPECT_EQ(ctx.vrrMinHz, 48.0);
+	dp2.enabled = 0;
+	ctx = pml::gui::vrrContextFromOutputs({dp1, dp2}, &which);
+	EXPECT_EQ(ctx.driver, pml::metrics::DriverVrr::Off);
+	EXPECT_EQ(which, "");
+	dp2.enabled = -1;
+	OutputVrr unreadable = dp1;
+	unreadable.enabled = -1;
+	EXPECT_EQ(pml::gui::vrrContextFromOutputs({unreadable, dp2}).driver, pml::metrics::DriverVrr::Unknown);
+}
+
+TEST(LiveSession, VrrVerdictWithTheDriversState)
+{
+	FakeProducer p;
+	ASSERT_TRUE(p.ok()) << p.error();
+	const pml::SwapchainInfo info = makeSwapchainInfo(1, 2560, 1440, pml::monotonicNs(), 0, "VKD3D");
+	p.addSwapchain(info);
+	LiveSession s;
+	s.setRunning(false);
+	s.setOutputSourceForTest([] {
+		return std::vector<pml::gui::OutputVrr>{{"DP-1", true, 0, 120.0, 48, 180}, {"DP-2", true, 1, 240.0, 48, 500}};
+	});
+	s.setPid(p.pid());
+	ASSERT_TRUE(s.attached());
+	// Presents every 6 ms; every tenth frame reaches the screen 3 ms late (Lies of P, 2026-11-09).
+	std::vector<pml::FrameRecord> recs;
+	uint64_t t = s.attachNs();
+	for (uint64_t n = 1; n <= 900; ++n)
+	{
+		t += 6 * kMs;
+		recs.push_back(makeRecord(1, n, t, t + (n % 10 == 0 ? 7 : 4) * kMs));
+	}
+	p.publish(recs);
+	s.tickForTest(recs.back().presentStartNs + 20 * kMs);
+	EXPECT_EQ(s.vrrState(), "active");
+	EXPECT_GE(s.vrrScore(), 0);
+	EXPECT_LT(s.vrrScore(), 65);
+	EXPECT_EQ(s.vrrCause(), "uneven on screen, game steady");
+	EXPECT_TRUE(s.vrrSource().contains("VRR on, DP-2, 48–240 Hz")) << s.vrrSource().toStdString();
+	EXPECT_TRUE(s.vrrDetail().contains("on screen only")) << s.vrrDetail().toStdString();
 }

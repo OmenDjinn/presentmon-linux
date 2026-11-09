@@ -9,6 +9,7 @@
 #pragma once
 
 #include <pml/metrics/engine.hpp>
+#include <pml/metrics/vrr.hpp>
 #include <pml/protocol.hpp>
 
 #include <atomic>
@@ -54,6 +55,7 @@ struct Snapshot
 	double droppedPct = kNA;        // not displayed / frames with display info, long window
 	uint32_t droppedCount = 0;
 	uint32_t displayKnownCount = 0;
+	pml::metrics::VrrVerdict vrr;   // displayed frames of the long window (state NoData without display info)
 	uint64_t rowsTotal = 0;         // rows produced by the engine so far
 	float graphPresent[kGraphPoints] = {};  // MsBetweenPresents, max per bucket, oldest first, 0 = no data
 	float graphDisplay[kGraphPoints] = {};  // MsBetweenDisplayChange
@@ -85,6 +87,7 @@ struct DisplaySample
 	float untilDisplayedMs = 0;
 	float displayLatencyMs = 0;
 	float readyToScreenMs = -1;  // < 0: not available
+	float betweenPresentsMs = 0; // the game's frame interval of the same frame (for the VRR verdict)
 };
 
 class OverlayStats
@@ -96,6 +99,10 @@ public:
 	void push(const pml::FrameRecord &record);
 	void setCollecting(bool on);
 	bool collecting() const;
+	// What the VRR verdict knows about the output (refresh, VRR floor, the driver's VRR state). Default: the
+	// swapchain's refresh duration when the driver reported one, nothing else. Presenting thread.
+	void setVrrContext(const pml::metrics::VrrContext &context) { vrrContext_ = context; }
+	const pml::metrics::VrrContext &vrrContext() const { return vrrContext_; }
 
 	// Presenting thread: runs queued records through the engine, refreshes the snapshot's text
 	// numbers every 250 ms and the graph every call.
@@ -140,6 +147,8 @@ private:
 
 	std::deque<Sample> samples_;
 	std::deque<DisplaySample> displayed_;
+	pml::metrics::VrrContext vrrContext_;
+	std::vector<pml::metrics::VrrFrame> vrrScratch_;
 	struct Bucket
 	{
 		int64_t id = -1;

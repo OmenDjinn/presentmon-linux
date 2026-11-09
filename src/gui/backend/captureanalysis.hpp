@@ -45,6 +45,12 @@ class CaptureAnalysis : public QObject
 	Q_PROPERTY(bool hasDisplay READ hasDisplay NOTIFY loadedChanged)
 	Q_PROPERTY(double displayFps READ displayFps NOTIFY loadedChanged)
 	Q_PROPERTY(double droppedPct READ droppedPct NOTIFY loadedChanged)
+	// VRR verdict (pml/metrics/vrr.hpp) of the whole capture, without the driver's VRR state.
+	Q_PROPERTY(int vrrScore READ vrrScore NOTIFY loadedChanged)
+	Q_PROPERTY(QString vrrState READ vrrState NOTIFY loadedChanged)
+	Q_PROPERTY(QString vrrVerdict READ vrrVerdict NOTIFY loadedChanged)
+	Q_PROPERTY(QString vrrCause READ vrrCause NOTIFY loadedChanged)
+	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY loadedChanged)
 
 	// x = seconds since the first frame, y = ms.
 	Q_PROPERTY(FrameSeries *frameTimes READ frameTimes CONSTANT)
@@ -81,6 +87,11 @@ public:
 	bool hasDisplay() const;
 	double displayFps() const;
 	double droppedPct() const;
+	int vrrScore() const;
+	QString vrrState() const;
+	QString vrrVerdict() const;
+	QString vrrCause() const;
+	QString vrrDetail() const;
 	FrameSeries *frameTimes() const;
 	FrameSeries *displayTimes() const;
 	QList<double> histogram() const;

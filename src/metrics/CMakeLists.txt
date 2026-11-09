@@ -36,13 +36,15 @@ add_library(pml_metrics STATIC
 	src/adapter.cpp
 	src/engine.cpp
 	src/summary.cpp
+	src/vrr.cpp
 	include/pml/metrics/adapter.hpp
 	include/pml/metrics/engine.hpp
-	include/pml/metrics/summary.hpp)
+	include/pml/metrics/summary.hpp
+	include/pml/metrics/vrr.hpp)
 
 # Upstream sources are not ours: no warning flags for them.
 set_source_files_properties(${PML_MC_SOURCES} src/qpc_converter.cpp PROPERTIES COMPILE_OPTIONS "-w")
-set_source_files_properties(src/adapter.cpp src/engine.cpp src/summary.cpp PROPERTIES COMPILE_OPTIONS "${PML_WARNINGS}")
+set_source_files_properties(src/adapter.cpp src/engine.cpp src/summary.cpp src/vrr.cpp PROPERTIES COMPILE_OPTIONS "${PML_WARNINGS}")
 
 # Order matters: the shim must come before the PresentMon roots.
 target_include_directories(pml_metrics PUBLIC
@@ -63,6 +65,7 @@ if(PML_BUILD_TESTS)
 		tests/adapter_tests.cpp
 		tests/timeline_tests.cpp
 		tests/summary_tests.cpp
+		tests/vrr_tests.cpp
 		tests/test_util.hpp)
 	target_link_libraries(pml_metrics_tests PRIVATE pml_metrics pml_vulkan_headers GTest::gtest_main)
 	target_compile_options(pml_metrics_tests PRIVATE ${PML_WARNINGS})

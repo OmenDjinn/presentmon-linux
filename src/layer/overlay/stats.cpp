@@ -114,6 +114,7 @@ void OverlayStats::addDisplayRow(const pml::metrics::Row &row)
 	d.betweenDisplayMs = float(m.msBetweenDisplayChange);
 	d.untilDisplayedMs = float(m.msUntilDisplayed);
 	d.displayLatencyMs = float(m.msDisplayLatency);
+	d.betweenPresentsMs = float(m.msBetweenPresents);
 	if (!IsMissingFrameMetricValue(m.msReadyTimeToDisplayLatency) && m.msReadyTimeToDisplayLatency >= 0)
 		d.readyToScreenMs = float(m.msReadyTimeToDisplayLatency);
 	displayed_.push_back(d);
@@ -270,6 +271,16 @@ void OverlayStats::recompute(uint64_t nowNs)
 		}
 		if (readyN)
 			s.readyToScreenMs = ready / double(readyN);
+
+		// VRR verdict over the displayed frames of the long window: a steady reading rather than a
+		// per-second one (single hitches should move it, not dominate it).
+		vrrScratch_.clear();
+		for (const DisplaySample &d : displayed_)
+			vrrScratch_.push_back({d.betweenPresentsMs, d.betweenDisplayMs});
+		pml::metrics::VrrContext ctx = vrrContext_;
+		if (ctx.refreshHz <= 0 && info_.refreshDurationNs)
+			ctx.refreshHz = 1e9 / double(info_.refreshDurationNs);
+		s.vrr = pml::metrics::analyzeVrr(vrrScratch_, ctx);
 	}
 
 	if (s.idle)

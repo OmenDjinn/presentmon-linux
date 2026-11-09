@@ -346,6 +346,17 @@ Kirigami.Page {
                         }
                     }
 
+                    VrrPanel {
+                        Layout.fillWidth: true
+                        visible: single.a && single.a.loaded && single.a.hasDisplay
+                        score: single.a ? single.a.vrrScore : -1
+                        state_: single.a ? single.a.vrrState : ""
+                        verdict: single.a ? single.a.vrrVerdict : ""
+                        cause: single.a ? single.a.vrrCause : ""
+                        detail: single.a ? single.a.vrrDetail : ""
+                        source: "A recording does not say whether VRR was on; judged as if it were."
+                    }
+
                     ChartPanel {
                         Layout.fillWidth: true
                         Layout.preferredHeight: Kirigami.Units.gridUnit * 15
