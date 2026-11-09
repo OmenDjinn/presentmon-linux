@@ -7,7 +7,9 @@ DXVK/VKD3D under Proton) on Wayland, using `VK_EXT_present_timing`.
 How it works: an implicit Vulkan layer (`VkLayer_presentmon`) records one entry per present into a
 shared-memory ring (`/dev/shm/presentmon-linux.<pid>`), draws the overlay into the presented image, and the
 `presentmon` CLI reads the rings and runs Intel's own metrics code (`third_party/PresentMon`, compiled
-unmodified) to produce the CSV. Design: `docs/ARCHITECTURE.md`.
+unmodified) to produce the CSV. Design: `docs/ARCHITECTURE.md`. What we learned about frame timing on Linux (present timing,
+DXVK and vkd3d-proton pacing, frame caps, VRR, scoring): `docs/FINDINGS.md`. Working on the code with Claude Code:
+the project skill in `.claude/skills/presentmon-linux/`.
 
 Status: M1 (CLI + overlay) and M2's GPU columns (GPU busy / wait / latency / time, from GPU timestamps the layer
 adds around each queue submission; `PRESENTMON_GPU=0` turns them off). Input/click-to-photon columns are NA.
