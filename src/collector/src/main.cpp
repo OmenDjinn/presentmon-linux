@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-// presentmon: PresentMon for Linux. Capture (default), list, overlay.
+// presentmon: PresentMon for Linux. Capture (default), list, overlay, cap.
 #include "capture.hpp"
 #include "commands.hpp"
 #include "options.hpp"
@@ -17,10 +17,10 @@ int main(int argc, char **argv)
 	if (!args.empty())
 	{
 		const std::string cmd = args[0];
-		if (cmd == "list" || cmd == "overlay")
+		if (cmd == "list" || cmd == "overlay" || cmd == "cap")
 		{
 			args.erase(args.begin());
-			return cmd == "list" ? runList(args) : runOverlay(args);
+			return cmd == "list" ? runList(args) : cmd == "overlay" ? runOverlay(args) : runCap(args);
 		}
 		if (cmd == "capture")
 			args.erase(args.begin());

@@ -9,6 +9,7 @@ add_library(pml_collector_core STATIC
 	src/capture.cpp
 	src/list_cmd.cpp
 	src/overlay_cmd.cpp
+	src/cap_cmd.cpp
 	src/options.hpp
 	src/csv.hpp
 	src/log.hpp

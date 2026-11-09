@@ -640,6 +640,101 @@ TEST_F(CliTest, OverlayWarnsWhenNotLoaded)
 	EXPECT_NE(p.err().find("overlay is not loaded"), std::string::npos) << p.err();
 }
 
+TEST_F(CliTest, CapControlRoundTripThroughTheSegment)
+{
+	startProducer({ "--frames", "5", "--linger-ms", "15000" });
+	const std::string pid = std::to_string(producerPid());
+	std::string error;
+	auto seg = pml::Segment::open(pml::segmentNameForPid(producerPid()), &error);
+	ASSERT_TRUE(seg) << error;
+
+	auto run = [&](std::vector<std::string> args, int *code = nullptr) {
+		static int n = 0;
+		Proc p;
+		args.push_back("--process_id");
+		args.push_back(pid);
+		std::vector<std::string> full = { "cap" };
+		full.insert(full.end(), args.begin(), args.end());
+		EXPECT_TRUE(spawn(p, kCli, full, dir_, "cap" + std::to_string(n++)));
+		int c = p.wait(10000);
+		if (code)
+			*code = c;
+		return p.out() + p.err();
+	};
+
+	const pml::CapControl c0 = pml::readCapControl(*seg);
+	EXPECT_EQ(c0.available, 1u);
+	EXPECT_EQ(c0.mode, uint32_t(pml::CapMode::Off));
+	std::string out = run({ "status" });
+	EXPECT_NE(out.find("cap off"), std::string::npos) << out;
+	EXPECT_EQ(pml::readCapControl(*seg).generation, c0.generation) << "status must not write";
+
+	out = run({ "141" });
+	EXPECT_NE(out.find("not applied yet"), std::string::npos) << "the fake producer never presents: " << out;
+	pml::CapControl c1 = pml::readCapControl(*seg);
+	EXPECT_EQ(c1.mode, uint32_t(pml::CapMode::Fixed));
+	EXPECT_EQ(c1.fpsMilli, 141000u);
+	EXPECT_EQ(c1.placement, uint32_t(pml::CapPlacement::Late));
+	EXPECT_GT(c1.generation, c0.generation);
+	EXPECT_NE(out.find("cap 141.000 fps, late"), std::string::npos) << out;
+
+	out = run({ "59.94", "--placement", "early", "--no-reflex" });
+	c1 = pml::readCapControl(*seg);
+	EXPECT_EQ(c1.fpsMilli, 59940u);
+	EXPECT_EQ(c1.placement, uint32_t(pml::CapPlacement::Early));
+	EXPECT_TRUE(c1.flags & pml::kCapNoReflex);
+	EXPECT_NE(out.find("59.940 fps, early, no Reflex"), std::string::npos) << out;
+
+	// Placement and Reflex are kept by a later change of the rate; --reflex allows it again.
+	out = run({ "auto", "--max", "200", "--reflex" });
+	c1 = pml::readCapControl(*seg);
+	EXPECT_EQ(c1.mode, uint32_t(pml::CapMode::Auto));
+	EXPECT_EQ(c1.fpsMilli, 200000u);
+	EXPECT_EQ(c1.placement, uint32_t(pml::CapPlacement::Early));
+	EXPECT_FALSE(c1.flags & pml::kCapNoReflex);
+	EXPECT_NE(out.find("auto (VRR), at most 200.000 fps, early"), std::string::npos) << out;
+
+	// The status fields belong to the layer: the CLI prints them, never writes them.
+	pml::CapControl status = {};
+	status.available = 1;
+	status.method = uint32_t(pml::CapMethod::PresentEarly);
+	status.effectiveMilli = 200000;
+	status.meanWaitUs = 1250;
+	status.lateP99Us = 9;
+	status.refreshMilli = 239991;
+	status.vrr = 1;
+	pml::writeCapStatus(*seg, status);
+	out = run({ "status" });
+	EXPECT_NE(out.find("in force: 200.000 fps via present wait (early), mean wait 1.25 ms, release p99 9 us"),
+	          std::string::npos) << out;
+	EXPECT_NE(out.find("(VRR output 239.99 Hz)"), std::string::npos) << out;
+
+	out = run({ "off" });
+	c1 = pml::readCapControl(*seg);
+	EXPECT_EQ(c1.mode, uint32_t(pml::CapMode::Off));
+	EXPECT_EQ(c1.fpsMilli, 0u);
+	EXPECT_EQ(c1.effectiveMilli, 200000u) << "the CLI must not touch the layer's status";
+	EXPECT_EQ(c1.available, 1u);
+
+	// Errors
+	int code = 0;
+	for (std::vector<std::string> bad : std::vector<std::vector<std::string>>{
+	         { "fast" }, { "0" }, { "20000" }, { "141", "--placement", "middle" }, { "141", "--max", "100" },
+	         { "status", "--no-reflex" }, { "auto", "--max", "0" }, { "141", "--explode" } })
+	{
+		out = run(bad, &code);
+		EXPECT_EQ(code, 1) << bad[0] << ": " << out;
+	}
+	Proc help;
+	ASSERT_TRUE(spawn(help, kCli, { "cap", "help" }, dir_, "caphelp"));
+	EXPECT_EQ(help.wait(10000), 0);
+	EXPECT_NE(help.out().find("usage: presentmon cap"), std::string::npos) << help.out();
+	Proc none;
+	ASSERT_TRUE(spawn(none, kCli, { "cap", "100", "--process_name", "definitely_not_running" }, dir_, "capnone"));
+	EXPECT_EQ(none.wait(10000), 1);
+	EXPECT_NE(none.err().find("no matching live"), std::string::npos) << none.err();
+}
+
 // ---- review fixes ---------------------------------------------------------------------------------
 
 namespace {

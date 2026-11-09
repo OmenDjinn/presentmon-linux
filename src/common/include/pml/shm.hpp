@@ -96,9 +96,10 @@ public:
 	// leftovers of dead processes (removeDeadSegments with kCreateReapAfterNs), so crashed games do
 	// not pile up; if /dev/shm is still full (ENOSPC), it removes those silent for kStaleAfterNs once
 	// and retries.
+	// `initialCap` (optional) seeds the frame cap control (from the layer's environment).
 	static std::unique_ptr<Segment> create(const std::string &name, const ProcessIdentity &identity,
 	                                       uint32_t ringCapacity, const OverlayControl &initialOverlay,
-	                                       std::string *error = nullptr);
+	                                       std::string *error = nullptr, const CapControl *initialCap = nullptr);
 
 	// Reader: maps an existing segment read-write. Fails (nullptr + error) if it is still
 	// initializing, if magic/version/sizes do not match this build, or if the file is not a
@@ -220,6 +221,25 @@ void writeOverlayControl(Segment &segment, const OverlayControl &control);
 
 // Layer only: sets `available`.
 void setOverlayAvailable(Segment &segment, bool available);
+
+// ---- Frame cap control (both sides) ---------------------------------------------------------
+
+// Snapshot of the cap control: the settings as a consistent seqlock snapshot (a few quick retries while a write is in
+// progress, then best effort: never blocks), then the status (appliedGeneration first, acquire).
+CapControl readCapControl(const Segment &segment);
+
+// One attempt at the settings (generation, mode, fpsMilli, placement, flags): false when a write was in progress or
+// happened during the read. The layer calls this on its present path and retries on a later present.
+bool tryReadCapSettings(const Segment &segment, CapControl *out);
+
+// Readers (CLI, GUI): takes the seqlock (generation odd), stores mode, fpsMilli, placement and flags, releases it
+// (generation even, release). Concurrent writers take turns; one that died holding it is overridden after 50 ms.
+// Returns the new generation: the layer echoes it in appliedGeneration once its next present applied the settings.
+uint32_t writeCapControl(Segment &segment, const CapControl &control);
+
+// Layer only: stores the status half (available, method, effectiveMilli, refreshMilli, vrr, meanWaitUs, lateP99Us),
+// then appliedGeneration (release).
+void writeCapStatus(Segment &segment, const CapControl &status);
 
 // ---- Discovery --------------------------------------------------------------------------
 

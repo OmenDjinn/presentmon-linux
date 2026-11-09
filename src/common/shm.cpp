@@ -13,6 +13,7 @@
 #include <fcntl.h>
 #include <mutex>
 #include <pthread.h>
+#include <sched.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -157,7 +158,7 @@ bool Segment::map(int fd, size_t size, std::string *error)
 
 std::unique_ptr<Segment> Segment::create(const std::string &name, const ProcessIdentity &identity,
                                          uint32_t ringCapacity, const OverlayControl &initialOverlay,
-                                         std::string *error)
+                                         std::string *error, const CapControl *initialCap)
 {
 	if (!isPowerOfTwo(ringCapacity))
 	{
@@ -253,6 +254,15 @@ std::unique_ptr<Segment> Segment::create(const std::string &name, const ProcessI
 	h.heartbeatNs = h.createdNs;
 	h.overlay = initialOverlay;
 	h.overlay.generation = 1;
+	if (initialCap)
+	{
+		h.cap.mode = initialCap->mode;
+		h.cap.fpsMilli = initialCap->fpsMilli;
+		h.cap.placement = initialCap->placement;
+		h.cap.flags = initialCap->flags;
+	}
+	h.cap.generation = 2;   // even: no write in progress (seqlock)
+	h.cap.available = 1;
 	h.state = uint32_t(SegmentState::Live);
 
 	atomicStore(h.magic, kMagic, std::memory_order_release);
@@ -575,6 +585,125 @@ void setOverlayAvailable(Segment &segment, bool available)
 	if (segment.inherited())
 		return;
 	atomicStore(segment.header().overlay.available, available ? 1u : 0u, std::memory_order_release);
+}
+
+// ---- Frame cap control ------------------------------------------------------------------
+
+namespace {
+
+void loadCapSettings(const CapControl &c, CapControl *out)
+{
+	out->mode = atomicLoad(c.mode, std::memory_order_relaxed);
+	out->fpsMilli = atomicLoad(c.fpsMilli, std::memory_order_relaxed);
+	out->placement = atomicLoad(c.placement, std::memory_order_relaxed);
+	out->flags = atomicLoad(c.flags, std::memory_order_relaxed);
+}
+
+} // namespace
+
+bool tryReadCapSettings(const Segment &segment, CapControl *out)
+{
+	const CapControl &c = segment.header().cap;
+	const uint32_t g = atomicLoad(c.generation, std::memory_order_acquire);
+	if (g & 1u)
+		return false;
+	CapControl copy = *out;
+	copy.generation = g;
+	loadCapSettings(c, &copy);
+	// Seqlock read side: the settings loads stay before the second generation load.
+	std::atomic_thread_fence(std::memory_order_acquire);
+	if (atomicLoad(c.generation, std::memory_order_relaxed) != g)
+		return false;
+	*out = copy;
+	return true;
+}
+
+CapControl readCapControl(const Segment &segment)
+{
+	const CapControl &c = segment.header().cap;
+	CapControl copy = {};
+	bool consistent = false;
+	for (int attempt = 0; attempt < 64 && !consistent; attempt++)
+	{
+		consistent = tryReadCapSettings(segment, &copy);
+		if (!consistent)
+			sched_yield();
+	}
+	if (!consistent)
+	{
+		// A writer is stuck mid-write (it died): best effort; its successor repairs the lock.
+		copy.generation = atomicLoad(c.generation, std::memory_order_acquire);
+		loadCapSettings(c, &copy);
+	}
+	copy.appliedGeneration = atomicLoad(c.appliedGeneration, std::memory_order_acquire);
+	copy.available = atomicLoad(c.available, std::memory_order_relaxed);
+	copy.method = atomicLoad(c.method, std::memory_order_relaxed);
+	copy.effectiveMilli = atomicLoad(c.effectiveMilli, std::memory_order_relaxed);
+	copy.refreshMilli = atomicLoad(c.refreshMilli, std::memory_order_relaxed);
+	copy.vrr = atomicLoad(c.vrr, std::memory_order_relaxed);
+	copy.meanWaitUs = atomicLoad(c.meanWaitUs, std::memory_order_relaxed);
+	copy.lateP99Us = atomicLoad(c.lateP99Us, std::memory_order_relaxed);
+	return copy;
+}
+
+uint32_t writeCapControl(Segment &segment, const CapControl &control)
+{
+	CapControl &c = segment.header().cap;
+	std::atomic_ref<uint32_t> gen(c.generation);
+	uint32_t g = gen.load(std::memory_order_relaxed);
+	uint32_t stuckValue = 0;   // the odd value seen, and since when: a live writer changes it within microseconds
+	uint64_t stuckSince = 0;
+	for (;;)
+	{
+		if (!(g & 1u))
+		{
+			if (gen.compare_exchange_weak(g, g + 1, std::memory_order_acquire, std::memory_order_relaxed))
+				break;
+			continue;
+		}
+		const uint64_t now = monotonicNs();
+		if (g != stuckValue)
+		{
+			stuckValue = g;
+			stuckSince = now;
+		}
+		else if (now - stuckSince > 50'000'000ull)
+		{
+			// The same odd value for 50 ms: its writer died between its stores. Take the lock over (a new odd
+			// value, so another waiting writer restarts its own 50 ms instead of taking it from us).
+			if (gen.compare_exchange_weak(g, g + 2, std::memory_order_acquire, std::memory_order_relaxed))
+			{
+				g += 1;
+				break;
+			}
+			continue;
+		}
+		sched_yield();
+		g = gen.load(std::memory_order_relaxed);
+	}
+	// Seqlock write side: the odd generation is visible before any of the stores below.
+	std::atomic_thread_fence(std::memory_order_release);
+	atomicStore(c.mode, control.mode, std::memory_order_relaxed);
+	atomicStore(c.fpsMilli, control.fpsMilli, std::memory_order_relaxed);
+	atomicStore(c.placement, control.placement, std::memory_order_relaxed);
+	atomicStore(c.flags, control.flags, std::memory_order_relaxed);
+	gen.store(g + 2, std::memory_order_release);
+	return g + 2;
+}
+
+void writeCapStatus(Segment &segment, const CapControl &status)
+{
+	if (segment.inherited())
+		return;
+	CapControl &c = segment.header().cap;
+	atomicStore(c.available, status.available, std::memory_order_relaxed);
+	atomicStore(c.method, status.method, std::memory_order_relaxed);
+	atomicStore(c.effectiveMilli, status.effectiveMilli, std::memory_order_relaxed);
+	atomicStore(c.refreshMilli, status.refreshMilli, std::memory_order_relaxed);
+	atomicStore(c.vrr, status.vrr, std::memory_order_relaxed);
+	atomicStore(c.meanWaitUs, status.meanWaitUs, std::memory_order_relaxed);
+	atomicStore(c.lateP99Us, status.lateP99Us, std::memory_order_relaxed);
+	atomicStore(c.appliedGeneration, status.appliedGeneration, std::memory_order_release);
 }
 
 // ---- Discovery --------------------------------------------------------------------------

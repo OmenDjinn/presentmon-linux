@@ -28,9 +28,10 @@ ColumnLayout {
         { bit: 16, label: "Latency" },
         { bit: 32, label: "Swapchain" },
         { bit: 64, label: "Dropped frames" },
-        { bit: 128, label: "VRR stability" }
+        { bit: 128, label: "VRR stability" },
+        { bit: 256, label: "Frame cap" }
     ]
-    readonly property int defaultPanels: 1 | 2 | 4 | 8 | 16 | 32 | 64
+    readonly property int defaultPanels: 1 | 2 | 4 | 8 | 16 | 32 | 64 | 128 | 256
     readonly property int effectivePanels: panels === 0 ? defaultPanels : panels
 
     spacing: Kirigami.Units.smallSpacing

@@ -51,6 +51,16 @@ public:
 		OverlayScaleRole,     // double: 0 = automatic
 		OverlayPanelsRole,    // int: pml::OverlayPanel bits, 0 = default set
 		LayerVersionRole,     // QString
+		CapAvailableRole,     // bool: the process's layer implements frame caps
+		CapModeRole,          // int: pml::CapMode (0 off, 1 fixed, 2 auto)
+		CapFpsRole,           // double: the fixed cap, or Auto's upper bound (0 = none)
+		CapPlacementRole,     // int: pml::CapPlacement (0 late, 1 early)
+		CapReflexRole,        // bool: the game's Reflex interval may be used
+		CapEffectiveRole,     // double: cap in force (0 = none), from the layer
+		CapMethodRole,        // int: pml::CapMethod in force
+		CapWaitMsRole,        // double: mean limiter wait per frame
+		CapVrrRole,           // int: Auto: 0 unknown, 1 VRR on, 2 VRR off
+		CapRefreshRole,       // double: Auto: refresh of the VRR output (Hz, 0 = unknown)
 	};
 	Q_ENUM(Role)
 
@@ -75,6 +85,9 @@ public:
 	Q_INVOKABLE bool setOverlayPosition(int pid, int position);
 	Q_INVOKABLE bool setOverlayScale(int pid, double scale);   // 0 = automatic, else 0.5 .. 4
 	Q_INVOKABLE bool setOverlayPanels(int pid, int panels);    // pml::OverlayPanel bits, 0 = default
+	// Frame cap (the same IPC as `presentmon cap`): mode pml::CapMode, fps (Fixed; Auto's upper bound, 0 = none),
+	// placement pml::CapPlacement, reflex = may use the game's Reflex interval.
+	Q_INVOKABLE bool setCap(int pid, int mode, double fps, int placement, bool reflex);
 
 	// The process with the highest present rate that is not idle (target of the record hotkey), 0 if none.
 	Q_INVOKABLE int busiestPid() const;

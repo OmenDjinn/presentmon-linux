@@ -9,6 +9,8 @@
 //   * nothing is hidden from the application, no extra queue work, no waits;
 //   * the application's pNext chains are never written (PresentChain / DeviceFeatureChain copy);
 //   * every internal failure degrades to a pass-through of the original call.
+#include "frame_cap.hpp"
+#include "frame_limiter.hpp"
 #include "gpu_timer.hpp"
 #include "log.hpp"
 #include "overlay_seam.hpp"
@@ -23,6 +25,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -84,6 +87,66 @@ struct SwapchainState
 	std::unique_ptr<VkTimingDriver> driver;
 	std::unique_ptr<TimingBroker> broker;
 	std::atomic<uint64_t> cpuFrames{0};  // presents counted for the overlay's CPU-only records
+
+	// Frame cap (frame_limiter.hpp). Presents to one swapchain are externally synchronized, so the limiter
+	// needs no lock; it exists once a cap was in force on this swapchain.
+	std::unique_ptr<FrameLimiter> limiter;
+	// VK_NV_low_latency2 (Reflex) state of this swapchain: the app's own sleep mode, the cap interval the layer
+	// merged into it, and when the app last called vkLatencySleepNV.
+	struct LowLatency
+	{
+		std::mutex mutex;                    // the app's vkSetLatencySleepModeNV vs the layer's re-apply
+		bool appSet = false;                 // the app called vkSetLatencySleepModeNV at least once
+		bool appNull = true;                 // ... with null (mode off)
+		VkLatencySleepModeInfoNV app = {VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV};
+		uint32_t capUs = 0;                  // the layer's cap interval the driver holds (0 = none)
+		bool layerApplied = false;           // the driver holds a mode the layer sent (to be restored)
+		uint64_t retryAfterNs = 0;           // the layer's last vkSetLatencySleepModeNV failed: next try
+		bool failLogged = false;
+		std::atomic<uint64_t> lastSleepNs{0};   // the app's last successful vkLatencySleepNV
+		std::atomic<uint64_t> sleeps{0};
+	} lowLatency;
+	// Frame cap held on the app's frame-pacing thread (late placement). DXVK's and vkd3d-proton's frame thread waits
+	// for each present (vkWaitForPresentKHR/2KHR: V-Sync on) or polls the present timing (DXVK with
+	// VK_EXT_present_timing: vkGetPastPresentationTimingEXT once per frame, every mode) before it releases the game
+	// thread. Holding that call holds the game before its next frame, as their own limiters do; a wait on their
+	// submit thread (in vkQueuePresentKHR) costs a frame of latency instead (measured: +9 ms at 100 fps).
+	struct FrameHold
+	{
+		enum Kind : uint32_t
+		{
+			None = 0,
+			PresentWait = 1,   // the app blocks in vkWaitForPresent*KHR for every present
+			TimingPoll = 2,    // another thread than the presenting one polls the present timing every frame
+		};
+		std::mutex mutex;                          // the holding thread (one at a time)
+		std::unique_ptr<FrameLimiter> limiter;     // under mutex
+		uint64_t lastHeldId = 0;                   // under mutex: each present id is held once, in order
+		uint64_t lastHeldPresent = 0;              // under mutex: `presents` at the last poll hold
+		std::atomic<uint32_t> kind{None};          // set by the present path
+		std::atomic<uint64_t> intervalNs{0};       // ... with the cap's interval (0 = not holding)
+		std::atomic<uint64_t> lastPlanNs{0};       // ... when it last planned this swapchain (older: stale, no hold)
+		// Present path only (presents of one swapchain are externally synchronized): is the hold pacing the game?
+		uint64_t windowStartNs = 0;                // a window of 32 presents (0: none yet)
+		uint32_t windowFrames = 0;
+		bool warmedUp = false;                     // the first window after the hold starts is not judged
+		uint64_t blockedUntilNs = 0;               // it was not working: the present-side wait caps until then
+		bool ineffectiveLogged = false;
+		std::atomic<uint32_t> presentThread{0};    // the thread that presents this swapchain
+		std::atomic<uint64_t> presents{0};         // presents while a cap is active
+		std::atomic<uint64_t> lastBlockingNs{0};   // the app's last blocking present wait (timeout >= 100 ms)
+		std::atomic<uint32_t> blockingStreak{0};   // ... and how many came in a row (each within 250 ms of the last)
+		std::atomic<uint64_t> lastPollNs{0};       // the app's last present-timing poll from another thread
+		std::atomic<uint32_t> pollStreak{0};       // ... and how many came in a row
+		std::atomic<uint64_t> pendingWaitNs{0};    // held since the last present (goes into the next record)
+		std::atomic<uint64_t> meanWaitNs{0};       // limiter stats for the status
+		std::atomic<uint32_t> releaseP99Ns{0};
+		std::atomic<uint64_t> sleepFailures{0};
+	} hold;
+	uint32_t capLoggedKind = 0;
+	uint32_t capLoggedMethod = 0;   // last frame cap method / cap logged for this swapchain (present thread)
+	uint32_t capLoggedMilli = 0;
+	bool capSleepFailLogged = false;
 };
 
 struct DeviceState
@@ -208,8 +271,9 @@ pml::Segment *ensureSegment(const InstanceState &instance)
 	identity.layerVersion = kLayerVersion;
 
 	std::string error;
+	const pml::CapControl initialCap = CapRuntime::controlFromEnvironment();
 	auto segment = pml::Segment::create(pml::segmentNameForPid(::getpid()), identity, pml::kDefaultRingCapacity,
-	                                    initialOverlayControl(), &error);
+	                                    initialOverlayControl(), &error, &initialCap);
 	if (!segment)
 	{
 		PML_LOG(LogLevel::Error, "cannot create the shared-memory segment: %s", error.c_str());
@@ -1129,9 +1193,386 @@ bool consumePresentSync(DeviceState &dev, VkQueue queue, const VkPresentInfoKHR 
 	return ok;
 }
 
+// ---------------------------------------------------------------------------------------
+// Frame cap (frame_limiter.hpp, frame_cap.hpp)
+// ---------------------------------------------------------------------------------------
+
+// The app last called vkLatencySleepNV this recently: it runs Reflex (NV_low_latency2) on that swapchain, so the cap
+// goes through its interval and the present-side wait stays off (two sleepers fight; under vkd3d-proton with
+// Reflex a present-side wait does not even throttle the game thread).
+constexpr int64_t kReflexRecentNs = 500'000'000;
+// The driver refused the layer's sleep mode: the present-side wait covers, the layer tries again this much later.
+constexpr uint64_t kReflexRetryNs = 1'000'000'000;
+// A present wait with at least this timeout blocks (a frame thread pacing on it); shorter ones are polls.
+constexpr uint64_t kBlockingPresentWaitNs = 100'000'000;
+// The hold engages once the app paces on its present waits: this many blocking waits in a row, the last one recent.
+// (DXVK with present-timing feedback waits for a couple of presents at start-up only.)
+constexpr uint32_t kHoldMinStreak = 8;
+// The poll hold sleeps inside the app's call, under whatever lock the app holds around it (DXVK: its timing mutex,
+// which a FIFO present on its submit thread also takes): only for caps of 20 fps and more.
+constexpr uint64_t kMaxPollHoldNs = 50'000'000;
+
+// Sends the app's own sleep mode with the layer's cap interval merged in, or restores the app's mode once the layer
+// has nothing to add. Caller holds sw.lowLatency.mutex. layerApplied changes only when the driver took the mode.
+// (No external synchronization is required on the swapchain for the NV_low_latency2 commands, vk.xml: the layer may
+// call this on the present thread while the app sleeps on another.)
+VkResult applyLatencyModeLocked(DeviceState &dev, SwapchainState &sw)
+{
+	auto &ll = sw.lowLatency;
+	if (!dev.dt.SetLatencySleepModeNV)
+		return VK_SUCCESS;
+	if (ll.capUs == 0)
+	{
+		if (!ll.layerApplied)
+			return VK_SUCCESS;
+		const VkResult r =
+		    dev.dt.SetLatencySleepModeNV(dev.ctx.device, sw.handle, ll.appSet && !ll.appNull ? &ll.app : nullptr);
+		if (r == VK_SUCCESS)
+			ll.layerApplied = false;
+		return r;
+	}
+	VkLatencySleepModeInfoNV mode = {VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV};
+	if (ll.appSet && !ll.appNull)
+		mode = ll.app;
+	mode.pNext = nullptr;
+	mode.minimumIntervalUs = mergedIntervalUs(mode.minimumIntervalUs, ll.capUs);
+	const VkResult r = dev.dt.SetLatencySleepModeNV(dev.ctx.device, sw.handle, &mode);
+	if (r == VK_SUCCESS)
+		ll.layerApplied = true;
+	return r;
+}
+
+struct CapPlan
+{
+	std::shared_ptr<SwapchainState> sw;  // whose cap state is used: the largest known swapchain of the present
+	FrameLimiter *limiter = nullptr;     // present-side wait (null: none)
+	bool early = false;
+	bool reflex = false;                 // the cap goes through the app's NV_low_latency2 interval
+	uint32_t appIntervalUs = 0;          // ... and the app's own minimumIntervalUs (the driver runs the longer one)
+	bool hold = false;                   // the cap holds the app's frame-pacing thread (SwapchainState::hold)
+	uint32_t holdKind = 0;               // SwapchainState::FrameHold::Kind
+	uint32_t driverIntervalUs = 0;       // Reflex: the minimumIntervalUs the driver holds (app's and the layer's)
+	bool active = false;                 // the cap code ran: report the status
+	CapDecision decision;
+	uint64_t earlyWaitNs = 0;
+	uint64_t lateWaitNs = 0;
+	bool lateDone = false;
+};
+
+CapPlan planCap(DeviceState &dev, const VkPresentInfoKHR *info, uint64_t nowNs)
+{
+	CapPlan plan;
+	CapRuntime &rt = CapRuntime::get();
+	pml::Segment *segment = process().segment.get();
+	CapDecision d = rt.decide(segment, 0, 0);
+	if (d.mode == uint32_t(pml::CapMode::Off) && !rt.everActive())
+		return plan;   // never capped in this process: no lookups on the present path
+	// One limiter per vkQueuePresentKHR call: the largest known swapchain's (a game's main window), the same one
+	// whatever order the app lists its swapchains in.
+	uint64_t bestArea = 0;
+	for (uint32_t i = 0; i < info->swapchainCount; i++)
+	{
+		auto s = findSwapchain(dev, info->pSwapchains[i]);
+		if (!s)
+			continue;
+		const uint64_t area = uint64_t(s->info.width) * uint64_t(s->info.height);
+		if (!plan.sw || area > bestArea)
+		{
+			plan.sw = std::move(s);
+			bestArea = area;
+		}
+	}
+	if (!plan.sw)
+		return plan;
+	SwapchainState &sw = *plan.sw;
+	if (d.mode == uint32_t(pml::CapMode::Auto))
+		d = rt.decide(segment, sw.info.width, sw.info.height);
+	plan.active = true;
+	plan.decision = d;
+
+	auto &ll = sw.lowLatency;
+	const uint64_t lastSleep = ll.lastSleepNs.load(std::memory_order_relaxed);
+	const bool reflexSeen = lastSleep != 0 && int64_t(nowNs - lastSleep) < kReflexRecentNs;
+	const bool wantReflex = d.fps > 0.0 && d.allowReflex && dev.dt.SetLatencySleepModeNV && reflexSeen;
+	const uint32_t wantUs = wantReflex ? capIntervalUs(d.fps) : 0;
+	{
+		std::lock_guard<std::mutex> lock(ll.mutex);
+		if (wantUs != ll.capUs && nowNs >= ll.retryAfterNs)
+		{
+			const uint32_t before = ll.capUs;
+			ll.capUs = wantUs;
+			const VkResult r = applyLatencyModeLocked(dev, sw);
+			if (r != VK_SUCCESS)
+			{
+				// The driver kept its mode: the present-side wait caps until the retry.
+				ll.capUs = before;
+				ll.retryAfterNs = nowNs + kReflexRetryNs;
+				if (!ll.failLogged)
+				{
+					ll.failLogged = true;
+					PML_LOG(LogLevel::Warn,
+					        "frame cap: vkSetLatencySleepModeNV failed (%d) on swapchain %llu; capping at the present "
+					        "instead, retrying every second", int(r), (unsigned long long)sw.serial);
+				}
+			}
+		}
+		// Reflex once the driver holds the cap's interval; also while a failed change left it an earlier cap's
+		// interval that alone caps at least as hard (a present-side wait on top would only add a second sleeper).
+		plan.reflex = wantReflex && ll.capUs == wantUs;
+		if (!plan.reflex && d.fps > 0.0 && ll.capUs != 0 && ll.capUs >= capIntervalUs(d.fps))
+			plan.reflex = true;
+		plan.appIntervalUs = ll.appSet && !ll.appNull ? ll.app.minimumIntervalUs : 0;
+		plan.driverIntervalUs = ll.capUs ? mergedIntervalUs(plan.appIntervalUs, ll.capUs) : plan.appIntervalUs;
+	}
+
+	const uint64_t interval = (!plan.reflex && d.fps > 0.0) ? uint64_t(std::llround(1.0e9 / d.fps)) : 0;
+	const bool early = d.placement == uint32_t(pml::CapPlacement::Early);
+	// Late placement holds the app's frame-pacing thread once it is seen pacing (SwapchainState::FrameHold): its
+	// present waits, else (not FIFO) its present-timing polls. In FIFO the poll hold is not used: DXVK holds a lock
+	// across that poll which its submit thread needs for FIFO presents (measured: 29 ms instead of 17, uneven rate).
+	auto &h = sw.hold;
+	h.presentThread.store(currentThread(), std::memory_order_relaxed);
+	h.presents.fetch_add(1, std::memory_order_relaxed);
+	h.lastPlanNs.store(nowNs, std::memory_order_relaxed);
+	uint32_t presentMode = uint32_t(sw.presentMode);
+	if (const auto *modes = findStruct<VkSwapchainPresentModeInfoKHR>(info->pNext,
+	                                                                  VK_STRUCTURE_TYPE_SWAPCHAIN_PRESENT_MODE_INFO_KHR))
+		for (uint32_t i = 0; modes->pPresentModes && i < modes->swapchainCount && i < info->swapchainCount; i++)
+			if (info->pSwapchains[i] == sw.handle)
+				presentMode = uint32_t(modes->pPresentModes[i]);
+	const bool fifo = presentMode == VK_PRESENT_MODE_FIFO_KHR || presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR;
+	const int64_t recentNs = int64_t(std::max<uint64_t>(100'000'000, 3 * interval));
+	auto steady = [&](const std::atomic<uint32_t> &streak, const std::atomic<uint64_t> &last) {
+		return streak.load(std::memory_order_relaxed) >= kHoldMinStreak &&
+		       int64_t(nowNs - last.load(std::memory_order_relaxed)) < recentNs;
+	};
+	uint32_t kind = SwapchainState::FrameHold::None;
+	if (interval && !early && nowNs >= h.blockedUntilNs)
+	{
+		if (steady(h.blockingStreak, h.lastBlockingNs))
+			kind = SwapchainState::FrameHold::PresentWait;
+		else if (!fifo && interval <= kMaxPollHoldNs && steady(h.pollStreak, h.lastPollNs))
+			kind = SwapchainState::FrameHold::TimingPoll;
+	}
+	// The held thread must pace the presents: over a window of 32 they average at least 0.9 of the interval. If not
+	// (a thread that waits or polls without pacing the game: it then runs far faster), the present-side wait caps
+	// for the next 2 s. The first window after the hold starts is not judged: frames queued under the present-side
+	// wait drain in it. (No backstop wait at the present while holding: on DXVK's submit thread it becomes the pacer
+	// itself, measured: presents every 0.95 T, the hold re-anchoring every frame.)
+	if (kind != SwapchainState::FrameHold::None)
+	{
+		if (!h.windowStartNs)
+		{
+			h.windowStartNs = nowNs;
+			h.windowFrames = 0;
+		}
+		else if (++h.windowFrames >= 32)
+		{
+			const uint64_t average = (nowNs - h.windowStartNs) / h.windowFrames;
+			const bool ineffective = h.warmedUp && average * 10 < interval * 9;
+			h.warmedUp = true;
+			h.windowStartNs = nowNs;
+			h.windowFrames = 0;
+			if (ineffective)
+			{
+				h.blockedUntilNs = nowNs + 2'000'000'000ull;
+				h.warmedUp = false;
+				h.windowStartNs = 0;
+				if (!h.ineffectiveLogged)
+				{
+					h.ineffectiveLogged = true;
+					PML_LOG(LogLevel::Warn, "frame cap: holding the app's frame thread did not pace its presents "
+					                        "(%.3f ms for %.3f ms); capping at the present instead (for 2 s, then "
+					                        "trying again)", double(average) / 1e6, double(interval) / 1e6);
+				}
+				kind = SwapchainState::FrameHold::None;
+			}
+		}
+	}
+	else
+	{
+		h.windowStartNs = 0;
+		h.warmedUp = false;
+	}
+	plan.hold = kind != SwapchainState::FrameHold::None;
+	plan.holdKind = kind;
+	h.kind.store(kind, std::memory_order_relaxed);
+	h.intervalNs.store(plan.hold ? interval : 0, std::memory_order_relaxed);
+	if (interval && !plan.hold)
+	{
+		if (!sw.limiter)
+			sw.limiter = std::make_unique<FrameLimiter>(systemWaitClock());
+		sw.limiter->setInterval(interval);
+		plan.limiter = sw.limiter.get();
+		plan.early = early;
+	}
+	else if (sw.limiter)
+	{
+		sw.limiter->setInterval(0);
+	}
+	return plan;
+}
+
+namespace {
+
+void noteStreak(std::atomic<uint64_t> &last, std::atomic<uint32_t> &streak, uint64_t now)
+{
+	const uint64_t prev = last.exchange(now, std::memory_order_relaxed);
+	if (prev && now - prev < 250'000'000)
+		streak.fetch_add(1, std::memory_order_relaxed);
+	else
+		streak.store(1, std::memory_order_relaxed);
+}
+
+// The hold itself: the caller owns h.mutex.
+void holdLocked(SwapchainState::FrameHold &h, uint64_t interval)
+{
+	if (!h.limiter)
+		h.limiter = std::make_unique<FrameLimiter>(systemWaitClock());
+	h.limiter->setInterval(interval);
+	const uint64_t waited = h.limiter->wait();
+	const LimiterStats st = h.limiter->stats();
+	h.pendingWaitNs.fetch_add(waited, std::memory_order_relaxed);
+	h.meanWaitNs.store(uint64_t(st.meanWaitNs), std::memory_order_relaxed);
+	h.releaseP99Ns.store(st.releaseP99Ns, std::memory_order_relaxed);
+	h.sleepFailures.store(st.sleepFailures, std::memory_order_relaxed);
+}
+
+} // namespace
+
+// After the app's present wait returned VK_SUCCESS for presentId: hold the waiting thread until the cap's deadline
+// (SwapchainState::FrameHold). The app's timeout (from callStartNs; UINT64_MAX: none) is never stretched.
+void holdPresentWait(DeviceState &dev, VkSwapchainKHR handle, uint64_t presentId, uint64_t timeoutNs, uint64_t callStartNs)
+{
+	if (!CapRuntime::get().everActive())
+		return;   // never capped in this process: nothing to count or hold
+	auto sw = findSwapchain(dev, handle);
+	if (!sw)
+		return;
+	auto &h = sw->hold;
+	const uint64_t now = pml::monotonicNs();
+	if (timeoutNs >= kBlockingPresentWaitNs)
+		noteStreak(h.lastBlockingNs, h.blockingStreak, now);
+	const uint64_t interval = h.intervalNs.load(std::memory_order_relaxed);
+	if (!interval || h.kind.load(std::memory_order_relaxed) != SwapchainState::FrameHold::PresentWait ||
+	    now - h.lastPlanNs.load(std::memory_order_relaxed) > std::max<uint64_t>(250'000'000, 3 * interval))
+		return;   // not holding, or a stale plan (the cap went to another swapchain)
+	std::unique_lock<std::mutex> lock(h.mutex, std::try_to_lock);
+	if (!lock.owns_lock() || presentId <= h.lastHeldId)
+		return;   // another thread holds this swapchain, or a present that was already held (a repeated wait)
+	h.lastHeldId = presentId;
+	if (timeoutNs != UINT64_MAX && (callStartNs + timeoutNs < callStartNs || callStartNs + timeoutNs < now + interval))
+		return;   // the app's timeout leaves no room for a whole interval: never stretch a wait past it
+	holdLocked(h, interval);
+}
+
+// Before the app's present-timing poll (vkGetPastPresentationTimingEXT) from another thread than the presenting one:
+// hold it until the cap's deadline, once per present (SwapchainState::FrameHold).
+void holdTimingPoll(SwapchainState &sw)
+{
+	if (!CapRuntime::get().everActive())
+		return;   // never capped in this process: nothing to count or hold
+	auto &h = sw.hold;
+	const uint32_t presenter = h.presentThread.load(std::memory_order_relaxed);
+	if (presenter == 0 || currentThread() == presenter)
+		return;   // presenting thread not known yet, or its own polls: a hold there is the late wait's job
+	const uint64_t now = pml::monotonicNs();
+	noteStreak(h.lastPollNs, h.pollStreak, now);
+	const uint64_t interval = h.intervalNs.load(std::memory_order_relaxed);
+	if (!interval || h.kind.load(std::memory_order_relaxed) != SwapchainState::FrameHold::TimingPoll ||
+	    now - h.lastPlanNs.load(std::memory_order_relaxed) > std::max<uint64_t>(250'000'000, 3 * interval))
+		return;   // not holding, or a stale plan (the cap went to another swapchain)
+	std::unique_lock<std::mutex> lock(h.mutex, std::try_to_lock);
+	if (!lock.owns_lock())
+		return;
+	const uint64_t presents = h.presents.load(std::memory_order_relaxed);
+	if (presents <= h.lastHeldPresent)
+		return;   // nothing presented since the last hold: a repeated poll passes
+	h.lastHeldPresent = presents;
+	holdLocked(h, interval);
+}
+
+void lateCapWait(CapPlan &cap)
+{
+	if (cap.limiter && !cap.early && !cap.lateDone)
+	{
+		cap.lateDone = true;
+		cap.lateWaitNs = cap.limiter->wait();
+	}
+}
+
+pml::CapMethod capMethod(const CapPlan &cap)
+{
+	if (cap.decision.fps <= 0.0)
+		return pml::CapMethod::None;
+	if (cap.reflex)
+		return pml::CapMethod::Reflex;
+	if (cap.hold)
+		return pml::CapMethod::FrameThread;
+	if (cap.limiter)
+		return cap.early ? pml::CapMethod::PresentEarly : pml::CapMethod::PresentLate;
+	return pml::CapMethod::None;
+}
+
+void finishCap(CapPlan &cap, uint64_t nowNs)
+{
+	CapRuntime &rt = CapRuntime::get();
+	pml::Segment *segment = process().segment.get();
+	if (!cap.active || !cap.sw)
+	{
+		rt.reportIdle(segment, nowNs);   // acknowledges a settings change while nothing is capped
+		return;
+	}
+	const pml::CapMethod method = capMethod(cap);
+	LimiterStats stats;
+	if (cap.limiter)
+		stats = cap.limiter->stats();
+	else if (cap.hold)
+	{
+		stats.meanWaitNs = double(cap.sw->hold.meanWaitNs.load(std::memory_order_relaxed));
+		stats.releaseP99Ns = cap.sw->hold.releaseP99Ns.load(std::memory_order_relaxed);
+		stats.sleepFailures = cap.sw->hold.sleepFailures.load(std::memory_order_relaxed);
+	}
+	// With Reflex the driver runs at the interval it holds (the app's own, or a failed change's earlier cap, when
+	// longer than the cap's): report that rate.
+	CapDecision shown = cap.decision;
+	const bool appSlower = cap.reflex && cap.driverIntervalUs > capIntervalUs(shown.fps);
+	if (appSlower)
+		shown.fps = 1.0e6 / double(cap.driverIntervalUs);
+	// One status line per change (method or cap), the first time it applies; the status follows at once.
+	const uint32_t milli = uint32_t(std::lround(shown.fps * 1000.0));
+	SwapchainState &sw = *cap.sw;
+	bool changed = false;
+	if (uint32_t(method) != sw.capLoggedMethod || milli != sw.capLoggedMilli || cap.holdKind != sw.capLoggedKind)
+	{
+		changed = true;
+		sw.capLoggedMethod = uint32_t(method);
+		sw.capLoggedMilli = milli;
+		sw.capLoggedKind = cap.holdKind;
+		const char *const kNames[] = {"none", "present wait (late)", "present wait (early)", "Reflex interval",
+		                              cap.holdKind == SwapchainState::FrameHold::PresentWait
+		                                  ? "hold on the app's frame thread (its vkWaitForPresent)"
+		                                  : "hold on the app's frame thread (its present-timing poll)"};
+		if (method == pml::CapMethod::None)
+			PML_LOG(LogLevel::Info, "frame cap: off on swapchain %llu", (unsigned long long)sw.serial);
+		else
+			PML_LOG(LogLevel::Info, "frame cap: %.3f fps on swapchain %llu via %s%s%s", shown.fps,
+			        (unsigned long long)sw.serial, kNames[uint32_t(method)],
+			        cap.decision.mode == uint32_t(pml::CapMode::Auto) ? " (auto, VRR)" : "",
+			        appSlower ? " (the driver's Reflex interval is longer than the cap's)" : "");
+	}
+	if (stats.sleepFailures && !sw.capSleepFailLogged)
+	{
+		sw.capSleepFailLogged = true;
+		PML_LOG(LogLevel::Warn, "frame cap: the present thread cannot sleep (clock_nanosleep and nanosleep refused); "
+		                        "the cap spins instead");
+	}
+	rt.report(segment, shown, method, cap.limiter || cap.hold ? &stats : nullptr, nowNs, changed);
+}
+
 // Returns false (nothing done) when none of the swapchains is known to the layer.
 bool presentImpl(DeviceState &dev, VkQueue queue, const VkPresentInfoKHR *pPresentInfo, uint64_t startNs,
-                 PresentOutcome &outcome)
+                 PresentOutcome &outcome, CapPlan &cap)
 {
 	PresentScratch &s = presentScratch();
 	const uint32_t count = pPresentInfo->swapchainCount;
@@ -1214,6 +1655,15 @@ bool presentImpl(DeviceState &dev, VkQueue queue, const VkPresentInfoKHR *pPrese
 		                     : uint32_t(sw->presentMode);
 		pp.appPresentId = appId;
 		pp.appTiming = appTiming;
+		if (s.states[i] == cap.sw)   // the cap's swapchain: other swapchains of the call were not limited by it
+		{
+			// A hold in the app's present wait since the previous present counts towards this one.
+			pp.capWaitNs = cap.earlyWaitNs + sw->hold.pendingWaitNs.exchange(0, std::memory_order_relaxed);
+			if (pp.capWaitNs)
+				pp.extraFlags |= kFrameCapWait;
+			if (cap.reflex)
+				pp.extraFlags |= kFrameCapReflex;
+		}
 		pp.observeOnly = !allManaged;  // a swapchain without the timing bit forbids any timing node
 		pp.canInjectId = canInjectId;
 		s.plans[i] = sw->broker->beginPresent(pp);
@@ -1407,6 +1857,12 @@ bool presentImpl(DeviceState &dev, VkQueue queue, const VkPresentInfoKHR *pPrese
 	}
 	outcome.downResult = result;
 
+	// Frame cap, late placement: after the driver's present, inside the app's call (so the app's next frame starts
+	// later). The record's present end includes the wait, as the app experiences it.
+	lateCapWait(cap);
+	if (cap.lateDone)
+		endNs = pml::monotonicNs();
+
 	// Per swapchain results, emulated errors, records.
 	VkResult returned = result;
 	for (uint32_t i = 0; i < count; i++)
@@ -1416,6 +1872,8 @@ bool presentImpl(DeviceState &dev, VkQueue queue, const VkPresentInfoKHR *pPrese
 		if (sw && sw->broker)
 		{
 			s.open[i] = 0;
+			if (cap.lateWaitNs && s.states[i] == cap.sw)
+				sw->broker->noteCapWait(s.plans[i].token, cap.lateWaitNs);
 			sw->broker->endPresent(s.plans[i].token, endNs, r);
 			if (s.plans[i].forcedResult != VK_SUCCESS && r >= 0)
 			{
@@ -1442,6 +1900,14 @@ bool presentImpl(DeviceState &dev, VkQueue queue, const VkPresentInfoKHR *pPrese
 			                      : uint32_t(sw->presentMode);
 			rec.imageIndex = pPresentInfo->pImageIndices[i];
 			rec.overlayCpuNs = s.overlayCpu[i];
+			if (s.states[i] == cap.sw)
+			{
+				rec.capWaitNs = cap.earlyWaitNs + cap.lateWaitNs + sw->hold.pendingWaitNs.exchange(0, std::memory_order_relaxed);
+				if (rec.capWaitNs)
+					rec.flags |= kFrameCapWait;
+				if (cap.reflex)
+					rec.flags |= kFrameCapReflex;
+			}
 			if (s.drawn[i])
 				rec.flags |= kFrameOverlayDrawn;
 			if (r < 0)
@@ -1467,14 +1933,40 @@ VKAPI_ATTR VkResult VKAPI_CALL hookQueuePresent(VkQueue queue, const VkPresentIn
 	auto dev = deviceFor(dispatchKey(queue));
 	if (!dev)
 		return VK_ERROR_DEVICE_LOST;  // cannot happen: the loader only routes known devices here
+
+	// Frame cap: decided per present; early placement waits here, before anything of the present happens.
+	CapPlan cap;
+	try
+	{
+		cap = planCap(*dev, pPresentInfo, startNs);
+		if (cap.limiter && cap.early)
+			cap.earlyWaitNs = cap.limiter->wait();
+	}
+	catch (...)
+	{
+		PML_LOG_ONCE(LogLevel::Error, "internal error in the frame cap; no cap on this present");
+		cap = CapPlan{};
+	}
+
 	if (dev->managedSwapchains.load(std::memory_order_relaxed) == 0)
-		return dev->dt.QueuePresentKHR(queue, pPresentInfo);
+	{
+		const VkResult r = dev->dt.QueuePresentKHR(queue, pPresentInfo);
+		lateCapWait(cap);
+		finishCap(cap, pml::monotonicNs());
+		return r;
+	}
 
 	PresentOutcome outcome;
 	try
 	{
-		if (!presentImpl(*dev, queue, pPresentInfo, startNs, outcome))
-			return dev->dt.QueuePresentKHR(queue, pPresentInfo);
+		if (!presentImpl(*dev, queue, pPresentInfo, startNs, outcome, cap))
+		{
+			const VkResult r = dev->dt.QueuePresentKHR(queue, pPresentInfo);
+			lateCapWait(cap);
+			finishCap(cap, pml::monotonicNs());
+			return r;
+		}
+		finishCap(cap, pml::monotonicNs());
 		return outcome.returned;
 	}
 	catch (...)
@@ -1544,6 +2036,17 @@ VKAPI_ATTR VkResult VKAPI_CALL hookGetPastPresentationTiming(VkDevice device,
 	if (!dev)
 		return VK_ERROR_INITIALIZATION_FAILED;
 	auto sw = pInfo ? findSwapchain(*dev, pInfo->swapchain) : nullptr;
+	if (sw)
+	{
+		try
+		{
+			holdTimingPoll(*sw);   // frame cap: before the query, so the app gets the newest results
+		}
+		catch (...)
+		{
+			PML_LOG_ONCE(LogLevel::Error, "internal error in the frame cap's timing-poll hold; not held");
+		}
+	}
 	if (!sw || !sw->broker || !sw->managed || !pProps)
 		return dev->dt.GetPastPresentationTimingEXT(device, pInfo, pProps);
 	try
@@ -1603,6 +2106,112 @@ VKAPI_ATTR VkResult VKAPI_CALL hookQueueSubmit2(VkQueue queue, uint32_t count, c
 }
 
 // ---------------------------------------------------------------------------------------
+// VK_NV_low_latency2 (Reflex): the frame cap's interval goes into the app's sleep mode
+// ---------------------------------------------------------------------------------------
+
+VKAPI_ATTR VkResult VKAPI_CALL hookSetLatencySleepMode(VkDevice device, VkSwapchainKHR swapchain,
+                                                       const VkLatencySleepModeInfoNV *pSleepModeInfo)
+{
+	auto dev = deviceFor(dispatchKey(device));
+	if (!dev || !dev->dt.SetLatencySleepModeNV)
+		return VK_ERROR_INITIALIZATION_FAILED;
+	auto sw = findSwapchain(*dev, swapchain);
+	if (!sw)
+		return dev->dt.SetLatencySleepModeNV(device, swapchain, pSleepModeInfo);
+	auto &ll = sw->lowLatency;
+	std::lock_guard<std::mutex> lock(ll.mutex);
+	VkResult r;
+	if (ll.capUs == 0)
+	{
+		r = dev->dt.SetLatencySleepModeNV(device, swapchain, pSleepModeInfo);
+	}
+	else
+	{
+		// A cap is in force: the app's mode with the interval raised to the cap's (the app's own lower cap stays).
+		VkLatencySleepModeInfoNV mode = {VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV};
+		if (pSleepModeInfo)
+			mode = *pSleepModeInfo;
+		mode.minimumIntervalUs = mergedIntervalUs(mode.minimumIntervalUs, ll.capUs);
+		r = dev->dt.SetLatencySleepModeNV(device, swapchain, &mode);
+	}
+	// The driver's mode changed only on success: only then is it the app's mode (plus the layer's interval).
+	if (r == VK_SUCCESS)
+	{
+		ll.appSet = true;
+		ll.appNull = pSleepModeInfo == nullptr;
+		if (pSleepModeInfo)
+		{
+			ll.app = *pSleepModeInfo;
+			ll.app.pNext = nullptr;
+		}
+		ll.layerApplied = ll.capUs != 0;
+	}
+	return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL hookLatencySleep(VkDevice device, VkSwapchainKHR swapchain,
+                                                const VkLatencySleepInfoNV *pSleepInfo)
+{
+	auto dev = deviceFor(dispatchKey(device));
+	if (!dev || !dev->dt.LatencySleepNV)
+		return VK_ERROR_INITIALIZATION_FAILED;
+	const VkResult r = dev->dt.LatencySleepNV(device, swapchain, pSleepInfo);
+	// Reflex counts as in use only while the driver accepts the app's sleeps on this swapchain.
+	if (r == VK_SUCCESS)
+		if (auto sw = findSwapchain(*dev, swapchain))
+		{
+			sw->lowLatency.lastSleepNs.store(pml::monotonicNs(), std::memory_order_relaxed);
+			sw->lowLatency.sleeps.fetch_add(1, std::memory_order_relaxed);
+		}
+	return r;
+}
+
+// The app's present waits: the frame cap's hold placement (holdPresentWait). A failed or timed-out wait passes.
+VKAPI_ATTR VkResult VKAPI_CALL hookWaitForPresent(VkDevice device, VkSwapchainKHR swapchain, uint64_t presentId,
+                                                  uint64_t timeout)
+{
+	auto dev = deviceFor(dispatchKey(device));
+	if (!dev || !dev->dt.WaitForPresentKHR)
+		return VK_ERROR_INITIALIZATION_FAILED;
+	const uint64_t start = pml::monotonicNs();
+	const VkResult r = dev->dt.WaitForPresentKHR(device, swapchain, presentId, timeout);
+	if (r == VK_SUCCESS)
+	{
+		try
+		{
+			holdPresentWait(*dev, swapchain, presentId, timeout, start);
+		}
+		catch (...)
+		{
+			PML_LOG_ONCE(LogLevel::Error, "internal error in the frame cap's present-wait hold; not held");
+		}
+	}
+	return r;
+}
+
+VKAPI_ATTR VkResult VKAPI_CALL hookWaitForPresent2(VkDevice device, VkSwapchainKHR swapchain,
+                                                   const VkPresentWait2InfoKHR *pPresentWait2Info)
+{
+	auto dev = deviceFor(dispatchKey(device));
+	if (!dev || !dev->dt.WaitForPresent2KHR)
+		return VK_ERROR_INITIALIZATION_FAILED;
+	const uint64_t start = pml::monotonicNs();
+	const VkResult r = dev->dt.WaitForPresent2KHR(device, swapchain, pPresentWait2Info);
+	if (r == VK_SUCCESS && pPresentWait2Info)
+	{
+		try
+		{
+			holdPresentWait(*dev, swapchain, pPresentWait2Info->presentId, pPresentWait2Info->timeout, start);
+		}
+		catch (...)
+		{
+			PML_LOG_ONCE(LogLevel::Error, "internal error in the frame cap's present-wait hold; not held");
+		}
+	}
+	return r;
+}
+
+// ---------------------------------------------------------------------------------------
 // Proc addr lookup
 // ---------------------------------------------------------------------------------------
 
@@ -1625,6 +2234,10 @@ const Hook kDeviceHooks[] = {
 	HOOK("vkQueueSubmit2", hookQueueSubmit2<&DeviceDispatch::QueueSubmit2>),
 	HOOK("vkQueueSubmit2KHR", hookQueueSubmit2<&DeviceDispatch::QueueSubmit2KHR>),
 	HOOK("vkSetSwapchainPresentTimingQueueSizeEXT", hookSetQueueSize),
+	HOOK("vkSetLatencySleepModeNV", hookSetLatencySleepMode),
+	HOOK("vkLatencySleepNV", hookLatencySleep),
+	HOOK("vkWaitForPresentKHR", hookWaitForPresent),
+	HOOK("vkWaitForPresent2KHR", hookWaitForPresent2),
 	HOOK("vkGetPastPresentationTimingEXT", hookGetPastPresentationTiming),
 };
 

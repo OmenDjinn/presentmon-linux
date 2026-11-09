@@ -325,6 +325,27 @@ Kirigami.Page {
                             panels: page.current ? page.current.overlayPanels : 0
                         }
                     }
+
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        Layout.alignment: Qt.AlignTop
+                        spacing: Kirigami.Units.smallSpacing
+                        Kirigami.Heading { text: "Frame cap"; level: 3 }
+                        FrameCapControls {
+                            Layout.fillWidth: true
+                            pid: page.current ? page.current.pid : 0
+                            available: page.current ? page.current.capAvailable : false
+                            mode: page.current ? page.current.capMode : 0
+                            fps: page.current ? page.current.capFps : 0
+                            placement: page.current ? page.current.capPlacement : 0
+                            reflex: page.current ? page.current.capReflex : true
+                            effective: page.current ? page.current.capEffective : 0
+                            method: page.current ? page.current.capMethod : 0
+                            waitMs: page.current ? page.current.capWaitMs : 0
+                            vrr: page.current ? page.current.capVrr : 0
+                            refreshHz: page.current ? page.current.capRefresh : 0
+                        }
+                    }
                 }
             }
         }

@@ -19,7 +19,8 @@ constexpr uint64_t kIdleAfterNs = 1'500'000'000;   // no heartbeat for this long
 // baseline stays where it was.
 constexpr uint64_t kMinRateWindowNs = 100'000'000;
 constexpr uint32_t kAllPanels = pml::kPanelFps | pml::kPanelFrameTimeGraph | pml::kPanelCpu | pml::kPanelGpu |
-                                pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr;
+                                pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr |
+                                pml::kPanelCap;
 
 } // namespace
 
@@ -42,6 +43,9 @@ struct ProcessModel::Entry
 	int overlayPosition = 0;
 	double overlayScale = 0;
 	int overlayPanels = 0;
+	bool capAvailable = false, capReflex = true;
+	int capMode = 0, capPlacement = 0, capMethod = 0, capVrr = 0;
+	double capFps = 0, capEffective = 0, capWaitMs = 0, capRefresh = 0;
 
 	// Rate baseline.
 	uint64_t lastSeq = 0;
@@ -85,6 +89,16 @@ QHash<int, QByteArray> ProcessModel::roleNames() const
 		{OverlayPositionRole, "overlayPosition"},
 		{OverlayScaleRole, "overlayScale"},
 		{OverlayPanelsRole, "overlayPanels"},
+		{CapAvailableRole, "capAvailable"},
+		{CapModeRole, "capMode"},
+		{CapFpsRole, "capFps"},
+		{CapPlacementRole, "capPlacement"},
+		{CapReflexRole, "capReflex"},
+		{CapEffectiveRole, "capEffective"},
+		{CapMethodRole, "capMethod"},
+		{CapWaitMsRole, "capWaitMs"},
+		{CapVrrRole, "capVrr"},
+		{CapRefreshRole, "capRefresh"},
 		{LayerVersionRole, "layerVersion"},
 	};
 }
@@ -115,6 +129,16 @@ QVariant ProcessModel::data(const QModelIndex &index, int role) const
 	case OverlayPositionRole: return e.overlayPosition;
 	case OverlayScaleRole: return e.overlayScale;
 	case OverlayPanelsRole: return e.overlayPanels;
+	case CapAvailableRole: return e.capAvailable;
+	case CapModeRole: return e.capMode;
+	case CapFpsRole: return e.capFps;
+	case CapPlacementRole: return e.capPlacement;
+	case CapReflexRole: return e.capReflex;
+	case CapEffectiveRole: return e.capEffective;
+	case CapMethodRole: return e.capMethod;
+	case CapWaitMsRole: return e.capWaitMs;
+	case CapVrrRole: return e.capVrr;
+	case CapRefreshRole: return e.capRefresh;
 	case LayerVersionRole: return e.layerVersion;
 	default: return {};
 	}
@@ -246,6 +270,18 @@ void ProcessModel::updateEntry(Entry &e, uint64_t nowNs)
 	set(e.overlayScale, double(ctl.scalePermille) / 1000.0, OverlayScaleRole);
 	set(e.overlayPanels, int(ctl.panels), OverlayPanelsRole);
 
+	const pml::CapControl cap = pml::readCapControl(seg);
+	set(e.capAvailable, cap.available != 0, CapAvailableRole);
+	set(e.capMode, int(cap.mode), CapModeRole);
+	set(e.capFps, double(cap.fpsMilli) / 1000.0, CapFpsRole);
+	set(e.capPlacement, int(cap.placement), CapPlacementRole);
+	set(e.capReflex, !(cap.flags & pml::kCapNoReflex), CapReflexRole);
+	set(e.capEffective, double(cap.effectiveMilli) / 1000.0, CapEffectiveRole);
+	set(e.capMethod, int(cap.method), CapMethodRole);
+	set(e.capWaitMs, double(cap.meanWaitUs) / 1000.0, CapWaitMsRole);
+	set(e.capVrr, int(cap.vrr), CapVrrRole);
+	set(e.capRefresh, double(cap.refreshMilli) / 1000.0, CapRefreshRole);
+
 	if (!changed.isEmpty())
 	{
 		const int row = indexOfPid(e.pid);
@@ -376,6 +412,26 @@ bool ProcessModel::setOverlayPanels(int pid, int panels)
 	if (!e || panels < 0)
 		return false;
 	modifyOverlay(*e->segment, [&](pml::OverlayControl &c) { c.panels = uint32_t(panels) & kAllPanels; return true; });
+	updateEntry(*e, pml::monotonicNs());
+	return true;
+}
+
+bool ProcessModel::setCap(int pid, int mode, double fps, int placement, bool reflex)
+{
+	Entry *e = find(pid);
+	if (!e || mode < int(pml::CapMode::Off) || mode > int(pml::CapMode::Auto) || !std::isfinite(fps) || fps < 0 ||
+	    placement < int(pml::CapPlacement::Late) || placement > int(pml::CapPlacement::Early))
+		return false;
+	// Fixed: the rate; Auto: 0 (no bound) or a bound; both 1-10000 fps like the CLI (the layer ignores anything else).
+	if ((mode == int(pml::CapMode::Fixed) || (mode == int(pml::CapMode::Auto) && fps != 0.0)) &&
+	    !(fps >= 1.0 && fps <= 10000.0))
+		return false;
+	pml::CapControl ctl = pml::readCapControl(*e->segment);
+	ctl.mode = uint32_t(mode);
+	ctl.fpsMilli = mode == int(pml::CapMode::Off) ? ctl.fpsMilli : uint32_t(std::lround(std::min(fps, 10000.0) * 1000.0));
+	ctl.placement = uint32_t(placement);
+	ctl.flags = reflex ? (ctl.flags & ~uint32_t(pml::kCapNoReflex)) : (ctl.flags | pml::kCapNoReflex);
+	pml::writeCapControl(*e->segment, ctl);
 	updateEntry(*e, pml::monotonicNs());
 	return true;
 }

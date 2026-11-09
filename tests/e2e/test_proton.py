@@ -318,6 +318,8 @@ def run_proton(name, app_args, *, display="wayland", dxvk2=False, overlay="off",
             return raw + off0 + int((off1 - off0) * min(max(f, 0.0), 1.0))
         for r in rows:
             run.truth.append({"begin": mono(r["present_begin_qpc"]), "end": mono(r["present_end_qpc"]),
+                              "top": mono(r["loop_top_qpc"]) if r.get("loop_top_qpc") else None,
+                              "work": mono(r["work_start_qpc"]) if r.get("work_start_qpc") else None,
                               "fs_hr": r["fs_hr"], "hr": r.get("hr") or "0x00000000"})
     for metrics in ("v1", "v2"):
         p = os.path.join(run.dir, "pm_%s.csv" % metrics)

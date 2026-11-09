@@ -59,7 +59,11 @@ struct InstanceDispatch
 	X(GetSwapchainTimingPropertiesEXT) \
 	X(GetSwapchainTimeDomainPropertiesEXT) \
 	X(GetPastPresentationTimingEXT) \
-	X(GetCalibratedTimestampsKHR)
+	X(GetCalibratedTimestampsKHR) \
+	X(SetLatencySleepModeNV) \
+	X(LatencySleepNV) \
+	X(WaitForPresentKHR) \
+	X(WaitForPresent2KHR)
 
 struct DeviceDispatch
 {

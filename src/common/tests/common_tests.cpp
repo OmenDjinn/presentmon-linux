@@ -154,6 +154,121 @@ TEST(Segment, CreateOpenAndHeader)
 	EXPECT_FALSE(segmentIsStale(*reader, monotonicNs()));
 }
 
+TEST(Segment, CapControlRoundTrip)
+{
+	SegmentGuard guard;
+	CapControl initial = {};
+	initial.mode = uint32_t(CapMode::Fixed);
+	initial.fpsMilli = 141000;
+	initial.placement = uint32_t(CapPlacement::Early);
+	std::string error;
+	std::string name = uniqueName("cap");
+	guard.segment = Segment::create(name, testIdentity(), 64, {}, &error, &initial);
+	ASSERT_TRUE(guard.segment) << error;
+	auto reader = Segment::open(name, &error);
+	ASSERT_TRUE(reader) << error;
+
+	CapControl c = readCapControl(*reader);
+	EXPECT_EQ(c.generation, 2u) << "even: no write in progress";
+	EXPECT_EQ(c.appliedGeneration, 0u);
+	EXPECT_EQ(c.available, 1u) << "a layer with frame caps";
+	EXPECT_EQ(c.mode, uint32_t(CapMode::Fixed));
+	EXPECT_EQ(c.fpsMilli, 141000u);
+	EXPECT_EQ(c.placement, uint32_t(CapPlacement::Early));
+
+	// A reader writes the setting: generation moves, the status stays.
+	c.mode = uint32_t(CapMode::Auto);
+	c.fpsMilli = 0;
+	c.flags = kCapNoReflex;
+	c.effectiveMilli = 999;   // ignored: readers do not write the status
+	EXPECT_EQ(writeCapControl(*reader, c), 4u);
+	CapControl d = readCapControl(*guard.segment);
+	EXPECT_EQ(d.generation, 4u);
+	EXPECT_EQ(d.mode, uint32_t(CapMode::Auto));
+	EXPECT_EQ(d.flags, uint32_t(kCapNoReflex));
+	EXPECT_EQ(d.effectiveMilli, 0u);
+
+	// The layer writes the status: the setting and generation stay.
+	CapControl s = {};
+	s.available = 1;
+	s.method = uint32_t(CapMethod::Reflex);
+	s.effectiveMilli = 224000;
+	s.refreshMilli = 239991;
+	s.vrr = 1;
+	s.appliedGeneration = 4;
+	writeCapStatus(*guard.segment, s);
+	CapControl e = readCapControl(*reader);
+	EXPECT_EQ(e.generation, 4u);
+	EXPECT_EQ(e.appliedGeneration, 4u);
+	EXPECT_EQ(e.mode, uint32_t(CapMode::Auto));
+	EXPECT_EQ(e.method, uint32_t(CapMethod::Reflex));
+	EXPECT_EQ(e.effectiveMilli, 224000u);
+	EXPECT_EQ(e.refreshMilli, 239991u);
+	EXPECT_EQ(e.vrr, 1u);
+}
+
+TEST(Segment, CapControlSeqlock)
+{
+	SegmentGuard guard;
+	std::string error;
+	std::string name = uniqueName("capsl");
+	guard.segment = Segment::create(name, testIdentity(), 64, {}, &error);
+	ASSERT_TRUE(guard.segment) << error;
+	Segment &seg = *guard.segment;
+
+	// A write in progress (odd generation) is never read as settings.
+	atomicStore(seg.header().cap.generation, 7u);
+	CapControl out = {};
+	EXPECT_FALSE(tryReadCapSettings(seg, &out));
+	// ... and a writer that died holding the lock is overridden after 50 ms, leaving it even.
+	CapControl w = {};
+	w.mode = uint32_t(CapMode::Fixed);
+	w.fpsMilli = 90000;
+	const uint64_t t0 = monotonicNs();
+	const uint32_t g = writeCapControl(seg, w);
+	EXPECT_GE(monotonicNs() - t0, 50'000'000u);
+	EXPECT_EQ(g % 2, 0u);
+	EXPECT_EQ(g, 10u) << "taken over at 9, released at 10";
+	ASSERT_TRUE(tryReadCapSettings(seg, &out));
+	EXPECT_EQ(out.fpsMilli, 90000u);
+
+	// Two writers and a reader at once: every snapshot is one writer's whole setting, never a mix.
+	std::atomic<bool> stop{false};
+	auto writer = [&](uint32_t mode, uint32_t fps, uint32_t placement, uint32_t flags) {
+		CapControl c = {};
+		c.mode = mode;
+		c.fpsMilli = fps;
+		c.placement = placement;
+		c.flags = flags;
+		while (!stop.load())
+			writeCapControl(seg, c);
+	};
+	std::thread a(writer, uint32_t(CapMode::Fixed), 60000u, 0u, 0u);
+	std::thread b(writer, uint32_t(CapMode::Auto), 200000u, 1u, uint32_t(kCapNoReflex));
+	uint64_t consistent = 0, mixed = 0;
+	const uint64_t until = monotonicNs() + 200'000'000;
+	while (monotonicNs() < until)
+	{
+		CapControl c = {};
+		if (!tryReadCapSettings(seg, &c))
+			continue;
+		consistent++;
+		const bool isA = c.mode == uint32_t(CapMode::Fixed) && c.fpsMilli == 60000 && c.placement == 0 && c.flags == 0;
+		const bool isB = c.mode == uint32_t(CapMode::Auto) && c.fpsMilli == 200000 && c.placement == 1 &&
+		                 c.flags == uint32_t(kCapNoReflex);
+		const bool isFirst = c.fpsMilli == 90000;
+		if (!isA && !isB && !isFirst)
+			mixed++;
+		EXPECT_EQ(c.generation % 2, 0u);
+	}
+	stop = true;
+	a.join();
+	b.join();
+	EXPECT_GT(consistent, 100u);
+	EXPECT_EQ(mixed, 0u);
+	EXPECT_EQ(atomicLoad(seg.header().cap.generation) % 2, 0u);
+}
+
 TEST(Segment, RejectsBadCapacityAndMissing)
 {
 	std::string error;

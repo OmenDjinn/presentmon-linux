@@ -27,6 +27,7 @@
 #include <thread>
 #include <vector>
 
+#include <sys/resource.h>
 #include <unistd.h>
 
 #include <pml/clock.hpp>
@@ -118,6 +119,8 @@ struct Options
 	bool presentIdV1 = false;    // --app-present-id v1: VK_KHR_present_id + VK_KHR_present_wait
 	bool appTiming = false;
 	bool inputReactive = false;
+	bool ll2 = false;              // --ll2: VK_NV_low_latency2 like vkd3d-proton / DXVK-NVAPI with Reflex on
+	uint32_t ll2IntervalUs = 0;    // --ll2-interval-us: the app's own minimumIntervalUs (its own Reflex cap)
 	std::string logPath;
 	std::string wsi = "wayland";
 	uint32_t frameLatency = 2;
@@ -166,6 +169,10 @@ void printHelp()
 		"                            vkWaitForPresent2KHR, PRESENT_ID_2/PRESENT_WAIT_2 swapchain (DXVK 3.x)\n"
 		"                         v1 present_id + present_wait: VkPresentIdKHR and vkWaitForPresentKHR,\n"
 		"                            no swapchain flags (DXVK 2.x, vkd3d-proton)\n"
+		"  --ll2                VK_NV_low_latency2 (Reflex) like vkd3d-proton / DXVK-NVAPI: low-latency sleep mode,\n"
+		"                       vkLatencySleepNV + a timeline semaphore wait at the start of every frame (before the\n"
+		"                       frame's CPU work), latency markers; present ids (VK_KHR_present_id) are chained\n"
+		"  --ll2-interval-us N  the app's own minimumIntervalUs (a Reflex frame cap), default 0\n"
 		"  --app-timing         VK_EXT_present_timing: one-stage timing request on every present,\n"
 		"                       polled every frame like DXVK, every report validated. Implies\n"
 		"                       present_id2 IDs (without waiting unless --app-present-id); not with\n"
@@ -269,6 +276,8 @@ bool parseArgs(int argc, char **argv, Options &o)
 			o.presentIdV1 = hasVal && val == "v1";
 		}
 		else if (a == "--app-timing") o.appTiming = true;
+		else if (a == "--ll2") o.ll2 = true;
+		else if (a == "--ll2-interval-us") { if (!num(d) || d < 0 || d > 1e6) return false; o.ll2IntervalUs = uint32_t(d); o.ll2 = true; }
 		else if (a == "--input-reactive") o.inputReactive = true;
 		else {
 			fprintf(stderr, "vk_truth: unknown option %s (see --help)\n", a.c_str());
@@ -368,6 +377,13 @@ private:
 	PFN_vkWaitForPresent2KHR pfnWaitForPresent2 = nullptr;
 	PFN_vkWaitForPresentKHR pfnWaitForPresent = nullptr;
 	PFN_vkSetSwapchainPresentTimingQueueSizeEXT pfnSetTimingQueueSize = nullptr;
+	PFN_vkSetLatencySleepModeNV pfnSetLatencySleepMode = nullptr;
+	PFN_vkLatencySleepNV pfnLatencySleep = nullptr;
+	PFN_vkSetLatencyMarkerNV pfnSetLatencyMarker = nullptr;
+	VkSemaphore ll2Sem = VK_NULL_HANDLE;   // timeline semaphore the driver signals when the frame may start
+	uint64_t ll2Value = 0;
+	uint64_t ll2Sleeps = 0;
+	double ll2SleepMs = 0;
 	PFN_vkGetPastPresentationTimingEXT pfnGetPastTiming = nullptr;
 	PFN_vkGetSwapchainTimeDomainPropertiesEXT pfnGetTimeDomains = nullptr;
 
@@ -713,6 +729,18 @@ void App::createDevice()
 		exts.push_back(VK_EXT_PRESENT_TIMING_EXTENSION_NAME);
 		hasPresentTiming = true;
 	}
+	if (opt.ll2) {
+		if (!hasExt(avail, VK_NV_LOW_LATENCY_2_EXTENSION_NAME))
+			fatal(kExitVulkan, "--ll2: VK_NV_low_latency2 not supported");
+		exts.push_back(VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
+		// Markers name frames by present id: chain VkPresentIdKHR when nothing else does.
+		if (!hasPresentId1 && !hasPresentId2) {
+			if (!hasExt(avail, VK_KHR_PRESENT_ID_EXTENSION_NAME))
+				fatal(kExitVulkan, "--ll2: VK_KHR_present_id not supported");
+			exts.push_back(VK_KHR_PRESENT_ID_EXTENSION_NAME);
+			hasPresentId1 = true;
+		}
+	}
 	bool latestReady = false;
 	bool latestReadyKhr = hasExt(avail, VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME);
 	bool latestReadyExt = hasExt(avail, VK_EXT_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME);
@@ -740,6 +768,8 @@ void App::createDevice()
 	if (hasPresentWait2) { fWait2.presentWait2 = VK_TRUE; push(fWait2); }
 	if (hasPresentTiming) { fTiming.presentTiming = VK_TRUE; push(fTiming); }
 	if (latestReady) { fLatest.presentModeFifoLatestReady = VK_TRUE; push(fLatest); }
+	VkPhysicalDeviceVulkan12Features f12{ VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES };
+	if (opt.ll2) { f12.timelineSemaphore = VK_TRUE; push(f12); }
 
 	float prio = 1.0f;
 	VkDeviceQueueCreateInfo qci{ VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO };
@@ -767,6 +797,17 @@ void App::createDevice()
 	if (hasPresentWait1 && !pfnWaitForPresent)
 		fatal(kExitVulkan, "vkWaitForPresentKHR not available");
 	pfnSetTimingQueueSize = (PFN_vkSetSwapchainPresentTimingQueueSizeEXT)dp("vkSetSwapchainPresentTimingQueueSizeEXT");
+	if (opt.ll2) {
+		pfnSetLatencySleepMode = (PFN_vkSetLatencySleepModeNV)dp("vkSetLatencySleepModeNV");
+		pfnLatencySleep = (PFN_vkLatencySleepNV)dp("vkLatencySleepNV");
+		pfnSetLatencyMarker = (PFN_vkSetLatencyMarkerNV)dp("vkSetLatencyMarkerNV");
+		if (!pfnSetLatencySleepMode || !pfnLatencySleep || !pfnSetLatencyMarker)
+			fatal(kExitVulkan, "--ll2: VK_NV_low_latency2 functions not available");
+		VkSemaphoreTypeCreateInfo tci{ VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO };
+		tci.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+		VkSemaphoreCreateInfo sci{ VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO, &tci };
+		VK_CHECK(vkCreateSemaphore(device, &sci, nullptr, &ll2Sem));
+	}
 	pfnGetPastTiming = (PFN_vkGetPastPresentationTimingEXT)dp("vkGetPastPresentationTimingEXT");
 	pfnGetTimeDomains = (PFN_vkGetSwapchainTimeDomainPropertiesEXT)dp("vkGetSwapchainTimeDomainPropertiesEXT");
 
@@ -1258,6 +1299,9 @@ bool App::createSwapchain()
 	if (hasPresentId2) ci.flags |= VK_SWAPCHAIN_CREATE_PRESENT_ID_2_BIT_KHR;
 	if (hasPresentWait2) ci.flags |= VK_SWAPCHAIN_CREATE_PRESENT_WAIT_2_BIT_KHR;
 	if (hasPresentTiming) ci.flags |= VK_SWAPCHAIN_CREATE_PRESENT_TIMING_BIT_EXT;
+	VkSwapchainLatencyCreateInfoNV lci{ VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV };
+	lci.latencyModeEnable = VK_TRUE;
+	if (opt.ll2) ci.pNext = &lci;
 
 	VkSwapchainKHR fresh = VK_NULL_HANDLE;
 	VkResult r = vkCreateSwapchainKHR(device, &ci, nullptr, &fresh);
@@ -1270,6 +1314,13 @@ bool App::createSwapchain()
 		fatal(kExitVulkan, "vkCreateSwapchainKHR failed: VkResult %d", int(r));
 	swapchain = fresh;
 	extent = ext;
+	if (opt.ll2) {
+		VkLatencySleepModeInfoNV mode{ VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV };
+		mode.lowLatencyMode = VK_TRUE;
+		mode.lowLatencyBoost = VK_FALSE;
+		mode.minimumIntervalUs = opt.ll2IntervalUs;
+		VK_CHECK(pfnSetLatencySleepMode(device, swapchain, &mode));
+	}
 	swapUsesPresentId = hasPresentId2;
 	swapUsesWait2 = hasPresentWait2;
 	swapUsesWait1 = hasPresentWait1;  // v1 needs no swapchain flag
@@ -1633,6 +1684,17 @@ void App::summary(double wallSeconds)
 {
 	size_t n = rows.size();
 	printf("[vk_truth] summary: frames=%zu wall=%.3fs swapchain_recreations=%u\n", n, wallSeconds, recreations);
+	if (opt.ll2)
+		printf("[vk_truth] ll2: sleeps=%llu avg_sleep=%.3fms app_interval_us=%u\n", (unsigned long long)ll2Sleeps,
+		       ll2Sleeps ? ll2SleepMs / double(ll2Sleeps) : 0.0, opt.ll2IntervalUs);
+	{
+		// CPU time of the whole process (all threads, layers included): what a frame cap's spin costs.
+		rusage ru{};
+		if (getrusage(RUSAGE_SELF, &ru) == 0)
+			printf("[vk_truth] rusage: user_ms=%.1f sys_ms=%.1f\n",
+			       double(ru.ru_utime.tv_sec) * 1e3 + double(ru.ru_utime.tv_usec) / 1e3,
+			       double(ru.ru_stime.tv_sec) * 1e3 + double(ru.ru_stime.tv_usec) / 1e3);
+	}
 	if (n >= 2) {
 		std::vector<double> iv;
 		for (size_t i = 1; i < n; i++)
@@ -1842,8 +1904,35 @@ int App::run()
 		row.frame = frame;
 		row.presentId = chainIds ? frame + 1 : 0;
 
-		// 1. pacing sleep against an absolute schedule
+		// 0. Reflex (NV_low_latency2): the driver releases the frame through a timeline semaphore, before the frame
+		//    samples input (counted as sleep: the frame's CPU work starts after it).
 		row.sleepStart = monotonicNs();
+		auto marker = [&](VkLatencyMarkerNV m) {
+			if (!opt.ll2 || !row.presentId)
+				return;
+			VkSetLatencyMarkerInfoNV mi{ VK_STRUCTURE_TYPE_SET_LATENCY_MARKER_INFO_NV };
+			mi.presentID = row.presentId;
+			mi.marker = m;
+			pfnSetLatencyMarker(device, swapchain, &mi);
+		};
+		if (opt.ll2) {
+			VkLatencySleepInfoNV li{ VK_STRUCTURE_TYPE_LATENCY_SLEEP_INFO_NV };
+			li.signalSemaphore = ll2Sem;
+			li.value = ++ll2Value;
+			const uint64_t t0 = monotonicNs();
+			VK_CHECK(pfnLatencySleep(device, swapchain, &li));
+			VkSemaphoreWaitInfo wi{ VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO };
+			wi.semaphoreCount = 1;
+			wi.pSemaphores = &ll2Sem;
+			wi.pValues = &ll2Value;
+			VkResult wr = vkWaitSemaphores(device, &wi, 1'000'000'000ull);
+			if (wr != VK_SUCCESS)
+				fatal(kExitVulkan, "--ll2: vkWaitSemaphores after vkLatencySleepNV returned %d", int(wr));
+			ll2Sleeps++;
+			ll2SleepMs += double(monotonicNs() - t0) / 1e6;
+		}
+
+		// 1. pacing sleep against an absolute schedule
 		if (periodNs) {
 			if (!nextTarget || row.sleepStart > nextTarget + 2 * periodNs)
 				nextTarget = row.sleepStart; // first frame, or stalled: resync instead of bursting
@@ -1861,9 +1950,12 @@ int App::run()
 		// 3. CPU work
 		pumpEvents();
 		row.cpuStart = monotonicNs();
+		marker(VK_LATENCY_MARKER_SIMULATION_START_NV);
+		marker(VK_LATENCY_MARKER_INPUT_SAMPLE_NV);
 		if (cpuSpinNs)
 			while (monotonicNs() - row.cpuStart < cpuSpinNs) {}
 		row.cpuEnd = monotonicNs();
+		marker(VK_LATENCY_MARKER_SIMULATION_END_NV);
 
 		// 4. acquire + submit
 		Slot &s = slots[frame % slots.size()];
@@ -1901,7 +1993,9 @@ int App::run()
 		si.pCommandBufferInfos = &cbi;
 		si.signalSemaphoreInfoCount = 1;
 		si.pSignalSemaphoreInfos = &signal;
+		marker(VK_LATENCY_MARKER_RENDERSUBMIT_START_NV);
 		VK_CHECK(vkQueueSubmit2(queue, 1, &si, s.fence));
+		marker(VK_LATENCY_MARKER_RENDERSUBMIT_END_NV);
 		s.frame = int64_t(frame);
 
 		// 5. present
@@ -1933,9 +2027,11 @@ int App::run()
 		if (!swapchainFirstId)
 			swapchainFirstId = row.presentId;
 		at("vkQueuePresentKHR");
+		marker(VK_LATENCY_MARKER_PRESENT_START_NV);
 		row.presentPre = monotonicNs();
 		VkResult pr = vkQueuePresentKHR(queue, &pi);
 		row.presentPost = monotonicNs();
+		marker(VK_LATENCY_MARKER_PRESENT_END_NV);
 		row.presentResult = int32_t(pr);
 		bool presented = pr >= 0;
 		row.timing = (presented && swapUsesTiming) ? Row::Pending : Row::None;

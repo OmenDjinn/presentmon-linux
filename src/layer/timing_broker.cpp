@@ -180,6 +180,7 @@ PresentPlan TimingBroker::beginPresent(const PresentParams &p)
 	r.presentMode = p.presentMode;
 	r.imageIndex = p.imageIndex;
 	r.overlayCpuNs = p.overlayCpuNs;
+	r.capWaitNs = p.capWaitNs;
 	r.flags = p.extraFlags;
 	if (ourStages)
 		r.flags |= kFrameTimingRequested;
@@ -236,6 +237,17 @@ void TimingBroker::noteOverlay(uint64_t token, bool drawn, uint64_t cpuNs)
 	if (drawn)
 		e->rec.flags |= kFrameOverlayDrawn;
 	e->rec.overlayCpuNs = cpuNs;
+}
+
+void TimingBroker::noteCapWait(uint64_t token, uint64_t waitNs)
+{
+	std::lock_guard<std::mutex> lock(mutex_);
+	Entry *e = findToken(token);
+	if (!e)
+		return;
+	e->rec.capWaitNs += waitNs;
+	if (waitNs)
+		e->rec.flags |= kFrameCapWait;
 }
 
 void TimingBroker::endPresent(uint64_t token, uint64_t presentEndNs, VkResult result)

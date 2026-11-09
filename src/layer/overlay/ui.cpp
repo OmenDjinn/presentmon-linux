@@ -290,6 +290,17 @@ void drawOverlayUi(const UiParams &p)
 		}
 	}
 
+	if ((p.panels & pml::kPanelCap) && p.capShown)
+	{
+		label("Cap   ", true);
+		part(kValue, p.capValue.c_str());
+		if (!p.capDetail.empty())
+		{
+			label("  ");
+			part(kLabel, p.capDetail.c_str());
+		}
+	}
+
 	if (p.panels & pml::kPanelSwapchain)
 	{
 		part(kValue, p.runtimeLine.c_str(), true);

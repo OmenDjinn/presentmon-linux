@@ -253,6 +253,7 @@ int runList(const std::vector<std::string> &args)
 		            engine.empty() ? "-" : engine.c_str(), layerVersion.empty() ? "?" : layerVersion.c_str(),
 		            h.layerBits, state, age);
 		std::printf("    overlay: %s\n", describeOverlay(pml::readOverlayControl(seg)).c_str());
+		std::printf("    cap: %s\n", describeCap(pml::readCapControl(seg)).c_str());
 		std::printf("    segment: %s, ring %u records, written %llu, lost-by-layer %llu\n", f.name.c_str(),
 		            h.ringCapacity, static_cast<unsigned long long>(pml::atomicLoad(h.writeSeq)),
 		            static_cast<unsigned long long>(pml::atomicLoad(h.droppedRecords)));

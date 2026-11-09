@@ -101,6 +101,7 @@ enum OverlayPanel : uint32_t
 	kPanelSwapchain = 1u << 5,       // runtime, present mode, size, format / HDR, timing stage
 	kPanelDropped = 1u << 6,         // dropped (not displayed) frames
 	kPanelVrr = 1u << 7,             // VRR stability score and verdict (pml/metrics/vrr.hpp)
+	kPanelCap = 1u << 8,             // frame cap: target, method, wait per frame
 };
 
 // FrameRecord::flags
@@ -116,6 +117,8 @@ enum FrameFlag : uint32_t
 	kFrameOverlayDrawn = 1u << 7,      // the in-game overlay drew into this image
 	kFramePresentFailed = 1u << 8,     // presentResult < 0
 	kFrameSuboptimal = 1u << 9,        // presentResult == VK_SUBOPTIMAL_KHR
+	kFrameCapWait = 1u << 10,          // the layer's frame cap held this present (capWaitNs is how long)
+	kFrameCapReflex = 1u << 11,        // the cap was enforced through the app's NV_low_latency2 interval (no layer wait)
 };
 
 // SwapchainInfo::timingFlags
@@ -142,8 +145,11 @@ struct alignas(8) FrameRecord
 	uint64_t presentId;         // present ID used for timing (app's or layer's), 0 = none
 
 	// CPU side
+	// The app's view of its present call, like PresentMon's on Windows where a limiter inside Present() counts as
+	// time in Present(): a frame cap wait of the layer is inside [presentStartNs, presentEndNs] (capWaitNs says
+	// how long; early placement also moves the driver's present, and so the screen time, by that much).
 	uint64_t presentStartNs;    // when the app's vkQueuePresentKHR call entered the layer
-	uint64_t presentEndNs;      // when the driver's vkQueuePresentKHR returned (before our bookkeeping)
+	uint64_t presentEndNs;      // when the driver's vkQueuePresentKHR returned, or the layer's late cap wait ended
 	uint32_t threadId;          // gettid() of the presenting thread
 	int32_t presentResult;      // VkResult returned to the app
 
@@ -186,7 +192,11 @@ struct alignas(8) FrameRecord
 	uint64_t pipelineCompileBusyNs;    // union of compile intervals
 	uint64_t pipelineCompileSummedNs;  // sum of compile intervals
 
-	uint64_t reserved[8];
+	// Frame cap (src/layer/frame_limiter.hpp): time the layer held this present inside the application's
+	// vkQueuePresentKHR call, included in presentEndNs (late placement) or before the driver call (early).
+	uint64_t capWaitNs;
+
+	uint64_t reserved[7];
 };
 
 // ---------------------------------------------------------------------------------------
@@ -235,6 +245,65 @@ struct alignas(8) OverlayControl
 	uint32_t reserved[10];
 };
 
+// Frame cap control (CapControl::mode).
+enum class CapMode : uint32_t
+{
+	Off = 0,
+	Fixed = 1,      // fpsMilli
+	Auto = 2,       // just under the VRR maximum of the output with VRR on (min with fpsMilli when set)
+};
+
+// Where the present-side limiter waits (CapControl::placement).
+enum class CapPlacement : uint32_t
+{
+	Late = 0,       // after the driver's present returned: the next frame starts later (lowest latency; MangoHud's default)
+	Early = 1,      // before the driver call: the finished frame waits (most even present spacing, more latency)
+};
+
+// CapControl::flags
+enum CapFlag : uint32_t
+{
+	kCapNoReflex = 1u << 0,   // never use the app's NV_low_latency2 interval, always wait in the present
+};
+
+// How the cap is enforced right now (CapControl::method, written by the layer).
+enum class CapMethod : uint32_t
+{
+	None = 0,           // no cap in force
+	PresentLate = 1,
+	PresentEarly = 2,
+	Reflex = 3,         // through the app's VK_NV_low_latency2 minimumIntervalUs (the wait is the game's own sleep)
+	FrameThread = 4,    // late placement, held on the app's frame-pacing thread (in its vkWaitForPresentKHR/2KHR, or
+	                    // its per-frame vkGetPastPresentationTimingEXT poll): where DXVK's and vkd3d-proton's own
+	                    // limiters wait before they release the game thread
+};
+
+// Frame cap control, in the control area. Readers (CLI, GUI) write the first half and bump `generation`;
+// the layer writes the second half (status), each field on its own. Old layers leave it all zero
+// (`available` 0).
+struct alignas(8) CapControl
+{
+	// Written by readers, as a seqlock: `generation` is odd while a writer is between its first and last store
+	// (pml::writeCapControl), even otherwise; a snapshot whose generation was odd or changed while it was read is
+	// torn. It starts at 2.
+	uint32_t generation;
+	uint32_t mode;              // CapMode
+	uint32_t fpsMilli;          // cap in 1/1000 fps (Fixed), upper bound for Auto (0 = none)
+	uint32_t placement;         // CapPlacement
+	uint32_t flags;             // CapFlag bits
+	uint32_t reservedIn[3];
+
+	// Written by the layer.
+	uint32_t available;         // 1: the layer implements frame caps
+	uint32_t method;            // CapMethod in force on the most recently presented capped swapchain
+	uint32_t effectiveMilli;    // cap in force, 1/1000 fps (0 = none)
+	uint32_t refreshMilli;      // Auto: refresh of the VRR output used, 1/1000 Hz (0 = unknown)
+	uint32_t vrr;               // Auto: 0 unknown, 1 VRR on (an output has VRR_ENABLED), 2 VRR off everywhere
+	uint32_t meanWaitUs;        // mean limiter wait per frame over the last ~second
+	uint32_t lateP99Us;         // p99 of how late the limiter released a frame after its deadline
+	uint32_t appliedGeneration; // the reader generation whose settings this status reflects (0 = none yet)
+};
+
 // ---------------------------------------------------------------------------------------
 // Segment header
 // ---------------------------------------------------------------------------------------
@@ -274,7 +343,7 @@ struct alignas(64) SegmentHeader
 
 	// Control area, written by readers.
 	alignas(64) OverlayControl overlay;
-	uint64_t reservedControl[8];
+	CapControl cap;
 };
 
 struct alignas(8) SwapchainSlot
@@ -296,6 +365,7 @@ static_assert(std::is_trivially_copyable_v<SegmentHeader> && std::is_standard_la
 static_assert(sizeof(FrameRecord) == 320);
 static_assert(sizeof(SwapchainInfo) == 152);
 static_assert(sizeof(OverlayControl) == 64);
+static_assert(sizeof(CapControl) == 64);
 static_assert(sizeof(SwapchainSlot) == 160);
 static_assert(sizeof(RingSlot) == 328);
 static_assert(offsetof(SegmentHeader, writeSeq) % 64 == 0);

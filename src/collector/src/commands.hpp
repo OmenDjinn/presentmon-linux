@@ -14,6 +14,8 @@ namespace pml::cli {
 
 int runList(const std::vector<std::string> &args);
 int runOverlay(const std::vector<std::string> &args);
+int runCap(const std::vector<std::string> &args);
+std::string describeCap(const pml::CapControl &control, bool pending = false);   // cap_cmd.cpp
 
 // Segment filters shared by `list` and `overlay`.
 struct SegmentFilter

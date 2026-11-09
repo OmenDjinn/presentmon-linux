@@ -109,6 +109,7 @@ struct PresentParams
 	bool noLimit = false;                   // send the app's request even over its emulated queue size (see cancelPresent)
 	bool canInjectId = true;                // a VkPresentId2KHR may be added (every swapchain of the present has PRESENT_ID_2)
 	uint64_t overlayCpuNs = 0;
+	uint64_t capWaitNs = 0;                 // the frame cap held this present before the driver call (early placement)
 };
 
 // What to send down for this swapchain.
@@ -166,6 +167,8 @@ public:
 	// The overlay ran after beginPresent (it must not run for a present that is not sent): records
 	// whether it drew and how long it took. Call before endPresent.
 	void noteOverlay(uint64_t token, bool drawn, uint64_t cpuNs);
+	// The frame cap held this present after the driver call (late placement): adds to capWaitNs, sets kFrameCapWait.
+	void noteCapWait(uint64_t token, uint64_t waitNs);
 
 	// After the driver returned; `result` is this swapchain's result.
 	void endPresent(uint64_t token, uint64_t presentEndNs, VkResult result);

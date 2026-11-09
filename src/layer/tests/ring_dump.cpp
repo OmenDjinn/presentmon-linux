@@ -48,6 +48,8 @@ std::string flagText(uint32_t flags)
 	add(kFrameOverlayDrawn, 'O');
 	add(kFramePresentFailed, 'F');
 	add(kFrameSuboptimal, 'S');
+	add(kFrameCapWait, 'W');
+	add(kFrameCapReflex, 'R');
 	return s.empty() ? "-" : s;
 }
 
@@ -76,18 +78,18 @@ void printInfo(const Segment &segment)
 void printHeader()
 {
 	std::printf("swapchain,frame,present_id,present_start_ns,present_end_ns,ready_ns,latch_ns,screen_ns,screen_stage,"
-	            "flags,flag_text,result,present_mode,image,overlay_cpu_ns,thread,gpu_start_ns,gpu_busy_ns\n");
+	            "flags,flag_text,result,present_mode,image,overlay_cpu_ns,thread,gpu_start_ns,gpu_busy_ns,cap_wait_ns\n");
 }
 
 void printRecord(const FrameRecord &r)
 {
-	std::printf("%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%u,0x%x,%s,%d,%u,%u,%llu,%u,%llu,%llu\n",
+	std::printf("%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu,%u,0x%x,%s,%d,%u,%u,%llu,%u,%llu,%llu,%llu\n",
 	            (unsigned long long)r.swapchainSerial, (unsigned long long)r.frameIndex, (unsigned long long)r.presentId,
 	            (unsigned long long)r.presentStartNs, (unsigned long long)r.presentEndNs, (unsigned long long)r.readyNs,
 	            (unsigned long long)r.latchNs, (unsigned long long)r.screenNs, r.screenStage, r.flags,
 	            flagText(r.flags).c_str(), r.presentResult, r.presentMode, r.imageIndex,
 	            (unsigned long long)r.overlayCpuNs, r.threadId, (unsigned long long)r.gpuStartNs,
-	            (unsigned long long)r.gpuBusyNs);
+	            (unsigned long long)r.gpuBusyNs, (unsigned long long)r.capWaitNs);
 }
 
 } // namespace

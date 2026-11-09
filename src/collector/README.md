@@ -54,7 +54,8 @@ Behaviour worth knowing:
     presentmon list [--process_name N] [--process_id P]
 
 One block per live layer-enabled process: engine, layer version, heartbeat age, overlay state
-(`visible|hidden, position, scale, available|not available`), ring statistics and each swapchain (size,
+(`visible|hidden, position, scale, available|not available`), frame cap (setting and what is in force), ring
+statistics and each swapchain (size,
 format, colour space, present mode, surface, supported/used present stages, timing flags).
 
 ## overlay
@@ -67,11 +68,24 @@ the resulting state. `status` only reads. A process whose overlay is not loaded
 (`PRESENTMON_OVERLAY=off`) shows `not available`; show/hide still store the value and warn. Exit code 1
 when nothing matched.
 
+## cap
+
+    presentmon cap <fps>|auto|off|status [--process_name N] [--process_id P] [--placement late|early]
+                   [--max F] [--reflex|--no-reflex]
+
+Writes the settings half of the `CapControl` area of every matching live segment (all of them without a filter),
+then waits up to 500 ms for the layer to apply it (it echoes the change's generation with its status on its next
+present) and prints the setting and what is in force (rate, method: Reflex interval, hold on the game's frame
+thread, present wait late/early; mean wait, p99 release lateness; for auto the VRR output's refresh). A game that
+does not present in that time prints `not applied yet`. `--max` bounds `auto`; placement and Reflex are kept by a
+later change of the rate. `status` only reads. Exit code 1 when nothing matched or on a bad value (1-10000 fps).
+Design: `docs/ARCHITECTURE.md` 3.4.2.
+
 ## Tests
 
 `ctest` target `pml_collector_tests` (no GPU): CSV headers against PresentMon's gold files, the gold first
 rows rebuilt from their values, option parsing, and end-to-end runs of the executable against
 `pml_fake_producer` (a real segment with a deterministic timeline, `tests/fake_timeline.hpp`): v1/v2/default
 CSV values computed by hand, NA columns, dropped frames, console stats, lost records, list, an overlay
-toggle round trip through the segment, stale cleanup, `--timed`, `--delay`, `--terminate_on_proc_exit`,
+toggle and a cap round trip through the segment, stale cleanup, `--timed`, `--delay`, `--terminate_on_proc_exit`,
 SIGINT/SIGTERM. Hidden options for tests: `--segment NAME`, `--discovery_ms`, `--stats_interval_ms`.

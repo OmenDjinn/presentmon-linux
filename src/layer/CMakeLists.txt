@@ -9,6 +9,8 @@ find_package(Threads REQUIRED)
 
 add_library(pml_layer_core STATIC
 	timing_broker.cpp
+	frame_limiter.cpp
+	frame_cap.cpp
 	gpu_intervals.cpp
 	present_chain.cpp
 	process_segment.cpp
@@ -36,7 +38,9 @@ endif()
 target_compile_options(VkLayer_presentmon PRIVATE ${PML_WARNINGS} -fvisibility=hidden -fvisibility-inlines-hidden)
 target_compile_definitions(VkLayer_presentmon PRIVATE VK_NO_PROTOTYPES)
 target_link_libraries(VkLayer_presentmon PRIVATE pml_layer_core ${PML_LAYER_OVERLAY_TARGET})
-target_link_options(VkLayer_presentmon PRIVATE -Wl,--no-undefined -Wl,--exclude-libs,ALL)
+# -z nodelete: the loader dlcloses layers when the last instance goes, while the frame cap's DRM thread (detached,
+# frame_cap.cpp) may still run the library's code.
+target_link_options(VkLayer_presentmon PRIVATE -Wl,--no-undefined -Wl,--exclude-libs,ALL -Wl,-z,nodelete)
 set_target_properties(VkLayer_presentmon PROPERTIES
 	LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/layer
 	OUTPUT_NAME VkLayer_presentmon
@@ -82,7 +86,7 @@ if(PML_BUILD_TESTS)
 		set_target_properties(pml_timing_probe PROPERTIES OUTPUT_NAME timing_probe)
 	endif()
 
-	add_executable(pml_layer_tests tests/broker_tests.cpp tests/chain_tests.cpp tests/gpu_tests.cpp tests/process_tests.cpp)
+	add_executable(pml_layer_tests tests/broker_tests.cpp tests/cap_tests.cpp tests/chain_tests.cpp tests/gpu_tests.cpp tests/limiter_tests.cpp tests/process_tests.cpp)
 	target_link_libraries(pml_layer_tests PRIVATE pml_layer_core GTest::gtest_main)
 	target_compile_options(pml_layer_tests PRIVATE ${PML_WARNINGS})
 	add_test(NAME pml_layer_tests COMMAND pml_layer_tests)

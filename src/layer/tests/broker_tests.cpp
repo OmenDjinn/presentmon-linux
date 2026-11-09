@@ -559,6 +559,39 @@ TEST(Broker, CancelledInjectedPresentGivesItsIdBack)
 	EXPECT_TRUE(f.present(0).plan.inject) << "injection still on: the cancelled id never reached the driver";
 }
 
+TEST(Broker, CapWaitReachesTheRecord)
+{
+	// Early placement: the wait is known before the present (PresentParams); late: noteCapWait after the driver call.
+	Fixture f(IdMode::Layer);
+	auto presentWith = [&](uint64_t earlyNs, uint32_t flags, uint64_t lateNs) {
+		PresentParams p;
+		p.presentStartNs = f.driver.now;
+		p.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+		p.capWaitNs = earlyNs;
+		p.extraFlags = flags;
+		PresentPlan plan = f.broker->beginPresent(p);
+		EXPECT_TRUE(plan.inject);
+		EXPECT_EQ(f.driver.present(plan.injectedId, plan.timing), VK_SUCCESS);
+		f.broker->noteCapWait(plan.token, lateNs);
+		f.broker->endPresent(plan.token, f.driver.now + 10, VK_SUCCESS);
+		return plan.injectedId;
+	};
+	const uint64_t a = presentWith(3'000'000, kFrameCapWait, 0);
+	const uint64_t b = presentWith(0, 0, 2'500'000);
+	const uint64_t c = presentWith(0, 0, 0);
+	f.driver.finish(a, f.driver.now + 1'000'000, f.driver.now + 2'000'000);
+	f.driver.finish(b, f.driver.now + 3'000'000, f.driver.now + 4'000'000);
+	f.driver.finish(c, f.driver.now + 5'000'000, f.driver.now + 6'000'000);
+	f.broker->poll();
+	ASSERT_EQ(f.records.size(), 3u);
+	EXPECT_EQ(f.records[0].capWaitNs, 3'000'000u);
+	EXPECT_TRUE(f.records[0].flags & kFrameCapWait);
+	EXPECT_EQ(f.records[1].capWaitNs, 2'500'000u);
+	EXPECT_TRUE(f.records[1].flags & kFrameCapWait) << "a late wait sets the flag";
+	EXPECT_EQ(f.records[2].capWaitNs, 0u);
+	EXPECT_FALSE(f.records[2].flags & kFrameCapWait) << "no wait, no flag";
+}
+
 TEST(Broker, IdLessSwapchainsGetNoLayerTiming)
 {
 	// Without ids a report cannot be attributed to its present once one was given up on, so the layer

@@ -139,6 +139,8 @@ global shortcuts and keeps settings out of `~/.config`; `PML_GUI_APP_ID` sets th
     presentmon list [--process_name N] [--process_id P]
     presentmon overlay show|hide|toggle|status [--process_name N] [--process_id P]
                        [--position top-left|top-right|bottom-left|bottom-right] [--scale F|auto]
+    presentmon cap <fps>|auto|off|status [--process_name N] [--process_id P] [--placement late|early]
+                   [--max F] [--reflex|--no-reflex]          (see "Frame cap" below)
 
 Full flag table: `src/collector/README.md`. Windows-only flags (ETW, hotkeys) are rejected with a message. In v2
 mode the last displayed frame is not written (as in PresentMon). `Application` is the process name (the exe name
@@ -177,3 +179,28 @@ System Settings > Keyboard > Shortcuts > Add New > Command or Script. Enter the 
 `/home/<you>/.local/bin/presentmon overlay toggle` (after `cmake --install ... --prefix ~/.local`; or the build tree's
 `bin/presentmon`), then assign the key (for example Meta+F10). Works while a game is focused since KDE handles the
 key; with several layer-enabled processes it toggles all of them, add `--process_name <exe>` to target one.
+
+## Frame cap
+
+A frame rate limiter inside the layer (design and measurements: `docs/ARCHITECTURE.md`, 3.4.2). Set on the game:
+
+| Variable | Meaning |
+|---|---|
+| `PRESENTMON_FPS_CAP=<fps>` / `auto` / `off` | cap at that rate (1-10000, e.g. `141` or `59.94`); `auto`: just under the VRR maximum of the output with VRR on (223 at 239.99 Hz), nothing while VRR is off |
+| `PRESENTMON_CAP_PLACEMENT=late` / `early` | `late` (default): lowest latency; `early`: waits before the present, most even spacing, about a frame more latency |
+| `PRESENTMON_CAP_REFLEX=0` | never use the game's Reflex (NV_low_latency2) interval |
+
+Live, from another terminal (or the GUI's Live page, "Frame cap"):
+
+    presentmon cap 141 [--process_name N] [--process_id P] [--placement late|early] [--no-reflex|--reflex]
+    presentmon cap auto [--max 200]
+    presentmon cap off
+    presentmon cap status
+
+Where the layer waits, by what the game offers: through the game's Reflex interval (Reflex games); on DXVK's or
+vkd3d-proton's frame-pacing thread, as their own limiters do (DXVK with V-Sync off, vkd3d-proton with V-Sync on);
+else after the present, like MangoHud. Measured at 100 fps: as fast as the game's own cap in native Vulkan games, in
+DXVK games with V-Sync off (about 10 ms against MangoHud's 18-21) and vkd3d-proton games with V-Sync on (8-9
+against 28-29);
+in DXVK games with V-Sync on the game's own limiter or `DXVK_FRAME_RATE` is a frame faster than both. The overlay's
+"Cap" line and `presentmon cap status` show the rate and method in force.

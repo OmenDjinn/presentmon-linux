@@ -331,6 +331,84 @@ time between screen updates and the game's own frame interval:
 - In the overlay the driver's state is unknown (the game process would need DRM ioctls on its present thread);
   it shows on / ? / idle / off from the data.
 
+### 3.4.2 Frame caps (`src/layer/frame_limiter.*`, `frame_cap.*`, the cap code in `layer.cpp`)
+Research (2026-11-09; papers, DXVK, vkd3d-proton, MangoHud 0.8.4, Special K, LatencyFleX, low_latency_layer,
+dxvk-nvapi): no published algorithm beats the open ones. The best CPU-side limiter is an absolute deadline grid with
+a sleep-then-spin wait (DXVK's `FpsLimiter`, vkd3d-proton, Special K). What decides latency is **where** the wait
+sits: on the thread that starts the next frame, before it samples input. MangoHud waits inside
+`vkQueuePresentKHR`, which under DXVK and vkd3d-proton is their submit thread, so the game runs a frame ahead.
+
+**Limiter** (`FrameLimiter`): next deadline = previous deadline + T (no drift from wake-up lateness); a frame later
+than min(500 us, T/8) re-anchors the grid instead of catching up with a short frame. `clock_nanosleep(TIMER_ABSTIME)`
+to deadline - margin with the thread's timer slack at 1 ns for that sleep (restored), then PAUSE until the deadline.
+The margin follows the p99 of wake-up lateness (re-derived every 32 sleeps, 30 us .. min(1 ms, T/4)). A refused sleep
+(seccomp) falls back to `nanosleep`, else spins and is logged; an interval is never longer than 1 s.
+
+**Where it waits** (one plan per `vkQueuePresentKHR`, for the call's largest swapchain), in this order:
+1. **Reflex** (`VK_NV_low_latency2`): the app called `vkLatencySleepNV` in the last 500 ms, so its own sleep paces
+   the game thread. The layer sends the app's sleep mode with `minimumIntervalUs = max(app, ceil(1e6 / cap))`
+   (the app's own lower cap stays) and waits nowhere else. Committed only when the driver accepts it (else the
+   present-side wait covers and the layer retries every second); the app's mode is restored when the cap goes.
+   NVIDIA 615 enforces the interval even with `lowLatencyMode` false, about 0.5 % long (10.05 ms for 10 ms).
+2. **Frame-thread hold** (late placement): the app has a frame-pacing thread that releases its game thread, and the
+   layer holds that thread instead of the present (`SwapchainState::FrameHold`), as DXVK's and vkd3d-proton's own
+   limiters do:
+   - the app blocks in `vkWaitForPresentKHR`/`2KHR` (timeout >= 100 ms) for 8+ presents in a row
+     (vkd3d-proton's wait worker with V-Sync on; DXVK up to 3.1.1 with V-Sync on): held after the driver's wait
+     returns, once per present id, never past the app's timeout;
+   - another thread than the presenting one polls `vkGetPastPresentationTimingEXT` once per frame, 8+ in a row,
+     and the present is not FIFO (DXVK 3.1.1+ with present timing, which the layer offers on NVIDIA: its
+     `dxvk-frame` thread, V-Sync off): held before the poll is answered, once per present, for caps of 20 fps and
+     more (the app's lock around the poll is held that long). Not in FIFO: DXVK holds a lock across that poll which
+     its submit thread needs for FIFO presents (measured: 29 ms instead of 17, uneven rate).
+   - Safeguards: a hold only for a swapchain planned in the last max(250 ms, 3T); the hold must pace the game:
+     after the first window of 32 presents (queued frames drain in it), a window averaging under 0.9 T means the
+     held thread does not pace it, and the present-side wait caps for 2 s. No backstop wait at the present while
+     holding: on DXVK's submit thread it became the pacer itself (presents every 0.95 T, the hold re-anchoring).
+     The library is linked `-z nodelete` (the loader unloads layers with the last instance; the DRM thread may
+     still run its code).
+3. **Late** (default placement): after the driver's present returned, inside the app's call.
+4. **Early**: before the driver's present (most even present spacing, about a frame more latency).
+No two of them cap one frame. Records carry `capWaitNs` and `kFrameCapWait` / `kFrameCapReflex` (a hold counts into
+the next present's record); `presentStartNs`/`presentEndNs` stay the app's view of its call (a wait inside it is
+time in Present(), as in PresentMon on Windows).
+
+**Auto** (`CapRuntime`): floor(hz - hz^2/3600) (224 at 240 Hz, 223 at 239.99, 138 at 144; a community estimate of
+NVIDIA's Reflex + G-SYNC cap, no NVIDIA source) for the output whose CRTC has `VRR_ENABLED` = 1, picked by swapchain
+size, then orientation, then refresh; no cap while VRR is off. A thread reads DRM through `dlopen("libdrm.so.2")`
+every 500 ms while Auto is selected and idles otherwise. Limitation: a windowed game is not matched to its own
+output; with VRR on another output (KWin "Always", or another fullscreen app) Auto uses that output's rate.
+
+**Control**: `PRESENTMON_FPS_CAP=<fps>|auto|off`, `PRESENTMON_CAP_PLACEMENT=late|early`, `PRESENTMON_CAP_REFLEX=0`
+seed the segment's 64-byte `CapControl` block; `presentmon cap` and the GUI rewrite it live. Its settings half is a
+seqlock (generation odd while a reader writes; concurrent writers take turns; a writer that died is overridden after
+50 ms); the layer reads it with one atomic load per present and validates 1-10000 fps. The status half (method,
+rate in force, mean wait, p99 release lateness, VRR state) is written at most every 250 ms and on the first present
+after a change, with that change's generation (`appliedGeneration`), which `presentmon cap` waits for (500 ms).
+Never capped in the process: one atomic load per present, nothing else.
+
+**Measured** (tests/e2e/test_cap.py, NVIDIA 615, KDE Wayland; target 100 fps unless noted; latency = the app's frame
+start, after any wait of its own, to first pixel; medians):
+
+| Case | Game's own cap | Layer | MangoHud late | Translation layer's limiter |
+|---|---|---|---|---|
+| Native Vulkan, window, 120 Hz | 8.2-9.8 ms | 8.7-8.8 ms (late) | 8.4-9.3 ms | - |
+| DXVK 3.1.1+, D3D11, V-Sync off | 10.1-10.3 ms | 9.7-10.6 ms (frame-thread hold) | 18.1-21.3 ms | `DXVK_FRAME_RATE` 9.5-9.9 ms |
+| DXVK 3.1.1+, D3D11, V-Sync on | 10.1 ms | 19.5 ms (late) | 18.5 ms | `DXVK_FRAME_RATE` 10.1 ms |
+| vkd3d-proton, D3D12, V-Sync on | 7.2-9.0 ms | 8.3-9.1 ms (present-wait hold) | 28.1-29.5 ms | `VKD3D_FRAME_RATE` 8.0-9.8 ms |
+| VRR 239.99 Hz fullscreen FIFO, 223 fps | 1.6 ms | 1.6 ms (auto, late) | 1.6 ms | - |
+
+- Early placement adds about a frame everywhere (native 17.8-18.1 ms, DXVK 28 ms; MangoHud's early: 18.9-21, 28.4).
+- Rate on the app's clock: the layer 0.000 to -0.05 %, MangoHud -0.003 to -0.007 %, NVIDIA's Reflex interval -0.5 %.
+- Frame-time jitter (sd of the app's present intervals): the layer 0.011-0.028 ms, MangoHud 0.026-0.031 ms, the
+  app's own cap 0.011-0.017 ms; on screen, run-to-run noise (0.14-0.69 ms under VRR) is larger than any difference.
+- CPU per frame (vk_truth, 1 ms of its own work): uncapped 1.05 ms, layer 1.41-1.46, MangoHud 1.57-1.63, the app's
+  500 us spin 1.75-1.78.
+- Not reachable from a layer: DXVK 3.1.1+ with V-Sync on (no per-frame present wait, and the timing poll cannot be
+  held in FIFO) and vkd3d-proton with V-Sync off (its wait worker waits on a timeline semaphore, not a present).
+  There the layer is as good as MangoHud; the game's own cap, `DXVK_FRAME_RATE`/`VKD3D_FRAME_RATE` or Reflex are
+  a frame better.
+
 ### 3.5 `presentmon-gui` (`src/gui/`)
 A Qt 6 Quick + Kirigami app (C++23) in the same tree: one QML module `PresentMon` (static library `pml_gui`: the C++
 types and the QML pages) and the executable. No existing GUI fitted (Intel's PresentMon app, CapFrameX, FrameView and

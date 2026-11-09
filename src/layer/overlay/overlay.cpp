@@ -867,9 +867,54 @@ void shutdownImGui(OvSwapchain &s)
 // Description lines
 // ---------------------------------------------------------------------------------------
 
+// The frame cap line from the segment's CapControl (setting and the layer's status).
+void describeCap(const OvSwapchain &s, UiParams *up)
+{
+	if (!s.sc->segment)
+		return;
+	const pml::CapControl c = pml::readCapControl(*s.sc->segment);
+	if (c.mode == uint32_t(pml::CapMode::Off))
+		return;
+	up->capShown = true;
+	char buf[64];
+	if (c.effectiveMilli)
+	{
+		// Whole rates as such (141 fps), fractional ones with two decimals (59.94 fps).
+		std::snprintf(buf, sizeof(buf), c.effectiveMilli % 1000 ? "%.2f fps" : "%.0f fps",
+		              double(c.effectiveMilli) / 1000.0);
+		up->capValue = buf;
+		switch (pml::CapMethod(c.method))
+		{
+		case pml::CapMethod::Reflex:
+			up->capDetail = "Reflex";
+			break;
+		case pml::CapMethod::PresentLate:
+		case pml::CapMethod::PresentEarly:
+		case pml::CapMethod::FrameThread:
+			std::snprintf(buf, sizeof(buf), "wait %.2f ms%s", double(c.meanWaitUs) / 1000.0,
+			              c.method == uint32_t(pml::CapMethod::PresentEarly) ? " (early)"
+			              : c.method == uint32_t(pml::CapMethod::FrameThread) ? " (frame thread)"
+			                                                                 : "");
+			up->capDetail = buf;
+			break;
+		default:
+			up->capDetail.clear();
+			break;
+		}
+		if (c.mode == uint32_t(pml::CapMode::Auto))
+			up->capDetail += up->capDetail.empty() ? "auto" : ", auto";
+	}
+	else
+	{
+		up->capValue = c.mode == uint32_t(pml::CapMode::Auto) ? "auto" : "-";
+		up->capDetail = c.mode == uint32_t(pml::CapMode::Auto) ? (c.vrr == 2 ? "VRR off: no cap" : "VRR unknown") : "";
+	}
+}
+
 void describe(const OvSwapchain &s, UiParams *up)
 {
 	const pml::SwapchainInfo &info = s.sc->info;
+	describeCap(s, up);
 	uint32_t mode = info.presentMode;
 	if (s.stats)
 	{

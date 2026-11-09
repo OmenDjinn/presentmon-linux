@@ -34,4 +34,5 @@ pml_add_e2e(lifecycle    180)
 pml_add_e2e(multiprocess 120)
 pml_add_e2e(mangohud      90)
 pml_add_e2e(overhead     240)
+pml_add_e2e(cap          900)   # frame caps; the comparisons skip on a shared desktop (PML_E2E_SHARED_DESKTOP=1)
 pml_add_e2e(proton       300)   # skips without a GE-Proton (DXVK 3.x) or without bin/d3d11_truth.exe

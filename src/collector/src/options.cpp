@@ -294,6 +294,8 @@ usage: presentmon [capture] [options]       capture frame metrics from layer-ena
        presentmon overlay show|hide|toggle|status [--process_name N] [--process_id P]
                                                   [--position top-left|top-right|bottom-left|bottom-right]
                                                   [--scale F|auto]
+       presentmon cap <fps>|auto|off|status [--process_name N] [--process_id P]
+                                            [--placement late|early] [--max F] [--reflex|--no-reflex]
 
 Capture Target Options:
   --process_name name   Only record processes with the specified exe name. Can be repeated.

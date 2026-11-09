@@ -20,7 +20,7 @@ set(CMAKE_AUTOMOC ON)
 
 # The QML files live in qml/ but belong to the module root (qrc:/qt/qml/PresentMon/Main.qml).
 set(PML_GUI_QML Main LivePage CapturesPage SettingsPage StatTile ChartPanel ProcessDelegate OverlayControls
-	RecordControls CaptureDelegate CompareTable Histogram VrrPanel Fmt)
+	RecordControls CaptureDelegate CompareTable Histogram VrrPanel FrameCapControls Fmt)
 foreach(name ${PML_GUI_QML})
 	set_source_files_properties(qml/${name}.qml PROPERTIES QT_RESOURCE_ALIAS ${name}.qml)
 endforeach()
@@ -59,12 +59,9 @@ qt_add_qml_module(pml_gui
 		qml/CompareTable.qml
 		qml/Histogram.qml
 		qml/VrrPanel.qml
+		qml/FrameCapControls.qml
 		qml/Fmt.qml)
 target_include_directories(pml_gui PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/backend)
-# libdrm: the outputs' VRR state for the VRR verdict (backend/drmvrr.cpp).
-find_package(PkgConfig REQUIRED)
-pkg_check_modules(PML_LIBDRM REQUIRED IMPORTED_TARGET libdrm)
-target_link_libraries(pml_gui PRIVATE PkgConfig::PML_LIBDRM)
 target_link_libraries(pml_gui PUBLIC
 	Qt6::Core Qt6::Gui Qt6::Qml Qt6::Quick Qt6::QuickControls2 Qt6::Concurrent
 	KF6::GlobalAccel

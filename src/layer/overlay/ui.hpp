@@ -23,6 +23,9 @@ struct UiParams
 	std::string formatLine;              // "B8G8R8A8_SRGB  sRGB"
 	std::string timingLine;              // "timing: pixel-out + queue-end"
 	bool displayTiming = true;           // the swapchain can deliver screen times
+	bool capShown = false;               // a frame cap is selected (line drawn with kPanelCap)
+	std::string capValue;                // "224 fps"
+	std::string capDetail;               // "Reflex" / "wait 2.31 ms" / "auto: VRR off"
 };
 
 inline constexpr float kBaseFontPx = 16.0f;
@@ -35,7 +38,7 @@ float autoOverlayScale(uint32_t width, uint32_t height);
 // Default panel set when OverlayControl::panels == 0.
 inline constexpr uint32_t kDefaultPanels = pml::kPanelFps | pml::kPanelFrameTimeGraph | pml::kPanelCpu |
                                            pml::kPanelGpu | pml::kPanelLatency | pml::kPanelSwapchain |
-                                           pml::kPanelDropped | pml::kPanelVrr;
+                                           pml::kPanelDropped | pml::kPanelVrr | pml::kPanelCap;
 
 // Builds the window; call between ImGui::NewFrame() and ImGui::Render(), with the font already pushed.
 void drawOverlayUi(const UiParams &params);
