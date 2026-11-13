@@ -277,7 +277,7 @@ Zero means "missing" throughout PresentMon's code, so a real timestamp must neve
 - Numbers come from the **same PresentMon metrics code as the CSV**: the layer runs `UnifiedSwapChain` on its own
   finished records, in-process, and keeps rolling windows (fps, frame time graph, 1%/0.1% lows, CPU busy/wait,
   display latency, dropped frames, GPU busy/wait and GPU latency on a line of its own; GPU numbers show NA
-  when fewer than half the frames of the last second have GPU data; the VRR verdict, 3.4.1).
+  when fewer than half the frames of the last second have GPU data; the VRR readout, 3.4.1).
 - Visible by default when the layer is enabled. Env: `PRESENTMON_OVERLAY=1` (visible, default), `0` (loaded but
   hidden, can be shown from the CLI) or `off` (not loaded, swapchain untouched). Only `off` leaves the swapchain
   exactly as the app created it: `0` still adds `COLOR_ATTACHMENT` usage, because usage is fixed at creation and
@@ -315,27 +315,63 @@ Zero means "missing" throughout PresentMon's code, so a real timestamp must neve
   mean-of-slowest-1 % shown next to it. >= 1: 1% lows of 60 fps or more with little spread. It has no upper
   bound (it grows with frame rate), and the 60 fps reference ignores the refresh rate.
 
-### 3.4.1 VRR stability verdict (`src/metrics/include/pml/metrics/vrr.hpp`)
-One analyzer, used by the overlay (last 10 s of displayed frames), the GUI's Live page (the same, plus the
-driver's VRR state) and its Captures page (a whole CSV). Per pair of consecutive displayed frames it looks at the
-time between screen updates and the game's own frame interval:
-- **Uneven**: the screen spacing jumps by more than max(2 ms, 25 % of its median); "on screen only" when the
-  game's interval stayed within half that. Under VRR each jump is a refresh-rate jump (the cause of VRR flicker
-  on OLED/VA panels). **Stutter**: a frame on screen more than 2.5x the median (weighs 3). **LFC crossing**:
-  the spacing crosses the panel's lowest VRR rate (weighs 3; needs the EDID range).
-- Score = 100 * exp(-weighted events per pair / 0.25); >= 85 stable, >= 65 minor jitter, >= 40 unstable.
-  No published standard exists; the 2 ms floor keeps the game's normal sub-millisecond variation out (Lies of P
-  at 165 fps: its own interval jumped > 1.2 ms 13 % of the time, the screen's > 2 ms 21 % against 4 %).
-- State first: **off** when the driver says so or when screen updates snap to a refresh grid while the game's
-  intervals do not (the lowest common rate that explains it when the output's is unknown, so the overlay finds
-  "fixed 120 Hz" by itself); **idle** when the game runs at or above the refresh rate; **active**; **unknown**
-  when it cannot be told (the game itself on the grid, e.g. FIFO at the refresh rate): then the score is shown
-  with "?".
+### 3.4.1 VRR readout (`src/metrics/include/pml/metrics/vrr.hpp`)
+Modelled on a monitor's refresh-rate OSD: the rate the panel refreshes at now, how far it swings, and one word for
+what kind of swing it is. One analyzer for the overlay and the GUI's Live page (the live windows below; the Live
+page adds the driver's VRR state) and its Captures page (every frame of a CSV). Under VRR the panel refreshes when a
+frame arrives, so 1000 / (time since the previous screen update) is its refresh rate for that frame.
+
+Overlay row: `VRR    141 Hz  ±3   stable`, with the cause on a second line when jittery or unstable;
+`VRR    off    fixed 120 Hz` with VRR off; `VRR?` when the data cannot tell whether VRR is on.
+
+| Number | Live (overlay, Live page) | Capture |
+|---|---|---|
+| refresh rate | screen updates over the last 250 ms of screen time (a monitor's OSD averages a few frames too); the fixed rate with VRR off | median of the per-frame rates |
+| swing (±) | half the spread between the 5th and 95th percentile of the per-frame rates, last 2 s | the same over the recording |
+| verdict | last 2 s (at least 30 frames) | every frame |
+
+Verdict, first that applies (events per pair of consecutive screen updates, thresholds of the earlier 0-100 score):
+- **unstable**: >= 15 % of the pairs jump by more than max(2 ms, 25 % of the median interval) ("uneven").
+- **stutter**: a frame on screen more than 2.5x the median, at least 0.5 per second (one in the live 2 s).
+- **LFC**: the interval crosses the panel's lowest VRR rate, at least 0.5 per second (needs the EDID range).
+- **jittery**: >= 5 % uneven pairs.
+- **at max**: the game runs at the refresh cap: VRR has nothing to vary.
+- **varying**: the 250 ms rate moved by >= 15 % of the median within the window: VRR follows a frame rate that
+  changes, smoothly. Not a fault; a frame cap holds it still.
+- **stable**.
+
+Jittery and unstable name a cause: "uneven on screen, game steady" when the game's own interval stayed within half
+the threshold (the jitter was added after the game: compositor, driver, another screen's animation, FINDINGS 7),
+else "game frame times swing".
+
+No published standard exists for VRR stability; the thresholds are this project's. 5 % and 15 % are where the
+earlier score said "minor jitter" and "unstable": Lies of P with the other screen's 15 fps wallpaper had 21 % uneven
+pairs, a steady test app with it 10 %, and the test app under 1 % once the wallpaper paused (score 99). The 2 ms floor keeps the game's
+normal variation out (Lies of P at 165 fps: its own interval jumped > 1.2 ms 13 % of the time). The verdict judges
+milliseconds, while the readout shows Hz like a monitor: Hz is not linear in time, so the same 2 ms step is
+165 -> 124 Hz at 165 Hz but 60 -> 54 Hz at 60 Hz, and the swing reads large at high refresh rates while staying
+"stable".
+
+- State first, from the last 10 s: **off** when the driver says so or when screen updates snap to a refresh grid
+  while the game's intervals do not (the lowest common rate that explains it when the output's is unknown, so the
+  overlay finds "fixed 120 Hz" by itself); **idle** (at max) when the game runs at or above the refresh rate;
+  **active**; **unknown** when it cannot be told without the driver (the game itself on the grid, e.g. FIFO at the
+  refresh rate, or no known refresh rate: NVIDIA reports no refresh duration under VRR): the overlay then shows
+  `VRR?`.
 - The GUI reads, read-only through libdrm (`backend/drmvrr.cpp`), each connected output's CRTC `VRR_ENABLED`,
   mode refresh and EDID range descriptor. KWin enables VRR only for the active fullscreen window, so the one
-  output with VRR on is the game's; none on = VRR off (e.g. the game is not the active window).
-- In the overlay the driver's state is unknown (the game process would need DRM ioctls on its present thread);
-  it shows on / ? / idle / off from the data.
+  output with VRR on is the game's; none on = VRR off (e.g. the game is not the active window). Its panel draws a
+  bar over the EDID range with the swing band and a marker at the current rate.
+- The overlay gets the same driver state from the layer's DRM thread (`CapRuntime::vrrInfo`, 3.4.2): while the VRR
+  row is shown it asks every 250 ms, which keeps the thread reading the outputs every 500 ms (off the present
+  path; it stops 2 s after the last request). Without libdrm or DRM access in the game's container it falls back
+  to the timing alone.
+- Measured on DP-2 (240 Hz, VRR on throughout per `VRR_ENABLED`; vk_truth fullscreen, mailbox, 8 s each,
+  2026-11-13): cap 141 -> `141 Hz ±2 stable`; cap 300 -> `240 Hz ±1 at max`; cap 60 -> `60 Hz ±0 stable`;
+  120 fps with 0-5 ms random extra work -> `119 Hz ±60 unstable` (game frame times swing); cap 141 with a 40 ms hitch
+  every 90 frames -> `stutter` (123 Hz while a hitch is in the last 250 ms).
+- Below the VRR floor the driver repeats frames (LFC) and the panel runs at a multiple of the frame rate. The
+  readout shows the rate frames arrive at; a monitor's own OSD shows the multiplied rate.
 
 ### 3.4.2 Frame caps (`src/layer/frame_limiter.*`, `frame_cap.*`, the cap code in `layer.cpp`)
 Research (2026-11-09; papers, DXVK, vkd3d-proton, MangoHud 0.8.4, Special K, LatencyFleX, low_latency_layer,
@@ -383,7 +419,7 @@ time in Present(), as in PresentMon on Windows).
 **Auto** (`CapRuntime`): floor(hz - hz^2/3600) (224 at 240 Hz, 223 at 239.99, 138 at 144; a community estimate of
 NVIDIA's Reflex + G-SYNC cap, no NVIDIA source) for the output whose CRTC has `VRR_ENABLED` = 1, picked by swapchain
 size, then orientation, then refresh; no cap while VRR is off. A thread reads DRM through `dlopen("libdrm.so.2")`
-every 500 ms while Auto is selected and idles otherwise. Limitation: a windowed game is not matched to its own
+every 500 ms while Auto is selected or the overlay's VRR row asked in the last 2 s (3.4.1), and idles otherwise. Limitation: a windowed game is not matched to its own
 output; with VRR on another output (KWin "Always", or another fullscreen app) Auto uses that output's rate.
 
 **Control**: `PRESENTMON_FPS_CAP=<fps>|auto|off`, `PRESENTMON_CAP_PLACEMENT=late|early`, `PRESENTMON_CAP_REFLEX=0`
@@ -416,58 +452,11 @@ start, after any wait of its own, to first pixel; medians):
   There the layer is as good as MangoHud; the game's own cap, `DXVK_FRAME_RATE`/`VKD3D_FRAME_RATE` or Reflex are
   a frame better.
 
-### 3.4.3 Experience score (`src/metrics/include/pml/metrics/experience.hpp`)
-One 0-100 number for how a game plays, from what reached the screen; presented like the VRR verdict (same bands:
->= 85 smooth, >= 65 minor issues, >= 40 rough, below: very rough; the largest term as the cause under 85). Overlay
-panel "Exp" (last 10 s), GUI Live and Captures pages, the capture compare table. It replaces GQI as the summary;
-GQI stays next to the 1% lows for comparison with Blackbird PC Tech's charts.
-
-    score = 100 - rate - motion - stutter - latency       (additive impairments, as ITU-T G.1072), clipped 0..100
-
-| Term | From | Formula | Evidence |
-|---|---|---|---|
-| rate | mean screen interval t (MsBetweenDisplayChange) | min(60, d^2/(d+3)), d = max(0, t - 4 ms): 120 fps 2.6, 90 fps 5.0, 60 fps 10.2, 30 fps 26.6 | QoE about linear in frame time, flattening at 75-90 fps, slight gains to 500 fps ([Tokey et al. 2025](https://web.cs.wpi.edu/~claypool/papers/fps-500-25/paper.pdf)); collapse below 15-30 fps (Claypool & Claypool 2007) |
-| motion | RMS of MsAnimationError over non-hitch frames | min(30, 3 x max(0, rms - 1 ms)) | ~2 ms swings unnoticed, 6 ms bias perception to the long frames ([Klein et al. 2024](https://arxiv.org/abs/2306.01691)); frame-time SD slope -0.056 QoE/ms ([Xu & Claypool 2024](https://web.cs.wpi.edu/~claypool/papers/frame-variation-mmsys-24/paper.pdf)) |
-| stutter | per frame max(screen interval - median, abs(animation error)); a hitch exceeds max(2 x median, median + 8 ms) + 1 ms | min(50, 0.1 x hitch ms per second + 25 x clamp((worst - 50 ms)/100 ms, 0, 1.75)) | interruption magnitude predicts QoE (R2 0.93), frequency does not (0.18) (Xu & Claypool 2024); spikes under ~50 ms acceptable, 150 ms+ hurt ([Tokey et al. 2026](https://web.cs.wpi.edu/~claypool/papers/spikes-fdg-26/paper.pdf)) |
-| latency | median display latency (frame CPU start to screen; DisplayLatency, or MsUntilDisplayed + MsCPUBusy) | 0.848 x (I(L) - I(0)), I = ITU-T G.1072 input-delay impairment, high-sensitivity games: 20 ms 3, 40 ms 6.3, 100 ms 16.6 | G.1072 ([ITU](https://www.itu.int/rec/T-REC-G.1072/en)); FPS aiming degrades from ~40 ms (Ivkovic et al. 2015), 25 vs 55 vs 85 ms matters most for skilled players (NVIDIA) |
-
-**Pacing score**: `100 - 3 x (motion + stutter)`, the consistency part alone, shown next to the overall score
-(overlay "pace", GUI "Pacing", compare table). A steady stream scores 100 at any frame rate, so it answers "is it
-even?" independently of "how fast?". Inside the overall score judder and stutters are weighed against frame rate and
-latency. Shown on their own, they need 3x the scale for the same bands. That is a design choice calibrated on
-recordings: a 12/21 ms alternation players call juddery scores 67, the same game evenly paced 89-95, a 100 ms
-freeze every 4 s 52, 90 fps on a fixed 120 Hz screen 74. The 1% low / average ratio could not tell these apart: it
-read 0.71 for both the juddery and the evenly paced run of the same game, because it looks only at the slowest 1 %.
-Frame rate is named as the cause only below 58 fps shown: 60 fps and more is a choice, not a defect.
-
-Why both screen intervals and animation error: under V-Sync a full queue hides a 30 ms CPU hitch from the screen
-cadence (only the motion jumps), while a 100 ms freeze moves screen and simulation together (no animation error):
-each signal misses one kind. One missed refresh (exactly 2 x the median) is judder, not a hitch.
-
-Validation (scores from analyzeExperience on the recorded CSVs; tests/apps/vk_truth with `--stutter-every/--stutter-ms/--jitter-ms`, 8 s each; DP-1 fixed 120 Hz windowed,
-DP-2 240 Hz VRR fullscreen):
-
-| Scenario | Score | GQI | Main cost |
-|---|---|---|---|
-| VRR, cap 223 fps | 99 | 3.66 | - |
-| mailbox uncapped (975 presented, 120 shown) | 96 | 15.9 | rate (120 Hz screen) |
-| VRR, uncapped with jitter | 96 | 1.44 | judder |
-| mailbox, app cap 120 | 95 | 1.98 | latency 20 ms |
-| FIFO 120 (3-frame queue) | 92 | 1.90 | latency 38 ms |
-| VRR, cap 141, 25 ms hitch every second | 93 | 0.12 | stutter |
-| FIFO, deep queue + GPU 7 ms | 90 | 1.31 | latency 49 ms |
-| VRR cap 141 with VRR switching on/off | 90 | 2.31 | stutter |
-| FIFO 120, 30 ms CPU hitch every second (hidden by the queue) | 89 | 0.14 | stutter (animation error) |
-| mailbox, jitter 4-12 ms | 86 | 0.93 | judder |
-| FIFO, cap 90 on 120 Hz | 84 | 1.49 | judder |
-| mailbox 120, 100 ms freeze every 4 s | 79 | 0.01 | stutter |
-| FIFO, cap 60 on 120 Hz | 75 | 1.00 | judder |
-| FIFO, cap 40 | 64 | 0.66 | rate |
-
-Limits: the weights between terms are a design choice (no study puts smoothness and latency on one scale); latency
-excludes the mouse/OS input path; no study covers VRR judder, dropped frames or tearing (immediate mode tears; not
-scored); with too few frames (< 50) the score is -1. Animation error uses the frame's CPU start as its simulation time,
-as PresentMon does without app markers.
+### 3.4.3 Experience score (removed)
+A 0-100 experience score (frame rate shown, judder, stutters and latency) and a pacing score next to it were on the
+overlay and in the GUI until 2026-11-13, when they and the 0-100 VRR score gave way to the VRR readout (3.4.1).
+Their formula, the studies behind it and the validation recordings are in this file as of commit `cfd545a`; what
+they taught is in docs/FINDINGS.md 8.
 
 ### 3.5 `presentmon-gui` (`src/gui/`)
 A Qt 6 Quick + Kirigami app (C++23) in the same tree: one QML module `PresentMon` (static library `pml_gui`: the C++

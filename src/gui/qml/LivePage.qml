@@ -252,25 +252,19 @@ Kirigami.Page {
                     Layout.leftMargin: Kirigami.Units.largeSpacing * 2
                     Layout.rightMargin: Kirigami.Units.largeSpacing * 2
                     visible: live.hasDisplayInfo
-                    score: live.vrrScore
+                    live: true
+                    hz: live.vrrHz
+                    swingHz: live.vrrSwingHz
+                    lowHz: live.vrrLowHz
+                    highHz: live.vrrHighHz
+                    minHz: live.vrrMinHz
+                    maxHz: live.vrrMaxHz
+                    severity: live.vrrSeverity
                     state_: live.vrrState
                     verdict: live.vrrVerdict
                     cause: live.vrrCause
                     detail: live.vrrDetail
                     source: live.vrrSource
-                }
-
-                ExperiencePanel {
-                    Layout.fillWidth: true
-                    Layout.leftMargin: Kirigami.Units.largeSpacing * 2
-                    Layout.rightMargin: Kirigami.Units.largeSpacing * 2
-                    visible: live.hasDisplayInfo
-                    score: live.experienceScore
-                    pacing: live.pacingScore
-                    verdict: live.experienceVerdict
-                    cause: live.experienceCause
-                    detail: live.experienceDetail
-                    source: "Last 10 s of displayed frames. How the score is built: docs/ARCHITECTURE.md, 3.4.3."
                 }
 
                 ChartPanel {

@@ -2,8 +2,8 @@
 #include "captureanalysis.hpp"
 
 #include "csvreader.hpp"
+#include "format.hpp"
 
-#include <pml/metrics/experience.hpp>
 #include <pml/metrics/vrr.hpp>
 
 #include <QCoreApplication>
@@ -30,8 +30,7 @@ struct LoadResult
 	std::string error;
 	pml::gui::CaptureData data;
 	pml::gui::CaptureStats stats;
-	pml::metrics::VrrVerdict vrr;
-	pml::metrics::ExperienceVerdict experience;
+	pml::metrics::VrrReadout vrr;
 	QList<double> histogram;
 	double binMs = 1;
 	QList<QPointF> framePoints;
@@ -71,17 +70,11 @@ LoadResult loadOrThrow(const std::string &path, const std::atomic<bool> &cancel)
 	}
 	if (r.data.hasDisplay)
 	{
-		// A CSV does not say whether VRR was on: the verdict judges the pacing as if it were.
+		// A CSV does not say whether VRR was on: the readout judges the pacing as if it were, over every frame.
 		std::vector<pml::metrics::VrrFrame> frames(r.data.frameMs.size());
 		for (size_t i = 0; i < frames.size(); i++)
 			frames[i] = {r.data.frameMs[i], i < r.data.displayMs.size() ? r.data.displayMs[i] : 0.0f};
 		r.vrr = pml::metrics::analyzeVrr(frames);
-
-		std::vector<pml::metrics::ExperienceFrame> xp(r.data.displayMs.size());
-		for (size_t i = 0; i < xp.size(); i++)
-			xp[i] = {r.data.displayMs[i], i < r.data.animationErrorMs.size() ? r.data.animationErrorMs[i] : NAN,
-			         i < r.data.latencyMs.size() ? r.data.latencyMs[i] : NAN};
-		r.experience = pml::metrics::analyzeExperience(xp);
 	}
 
 	// Cover the usual frames: up to 1.5 x p99 (at least 2 x the median), but no further than 4 x the
@@ -151,8 +144,7 @@ struct CaptureAnalysis::Impl
 	QString error;
 	pml::gui::CaptureData data;
 	pml::gui::CaptureStats stats;
-	pml::metrics::VrrVerdict vrr;
-	pml::metrics::ExperienceVerdict experience;
+	pml::metrics::VrrReadout vrr;
 	QList<double> histogram;
 	double binMs = 1;
 };
@@ -189,7 +181,6 @@ void CaptureAnalysis::setPath(const QString &path)
 	d_->data = {};
 	d_->stats = {};
 	d_->vrr = {};
-	d_->experience = {};
 	d_->histogram.clear();
 	d_->binMs = 1;
 	d_->frameTimes.clear();
@@ -228,7 +219,6 @@ void CaptureAnalysis::setPath(const QString &path)
 			d_->data = std::move(r.data);
 			d_->stats = r.stats;
 			d_->vrr = r.vrr;
-			d_->experience = r.experience;
 			d_->histogram = std::move(r.histogram);
 			d_->binMs = r.binMs;
 			d_->frameTimes.setPoints(std::move(r.framePoints));
@@ -276,35 +266,23 @@ double CaptureAnalysis::gqi() const { return d_->loaded ? d_->stats.times.gqi : 
 bool CaptureAnalysis::hasDisplay() const { return d_->loaded && d_->data.hasDisplay; }
 double CaptureAnalysis::displayFps() const { return hasDisplay() ? d_->stats.displayFps : kNaN; }
 double CaptureAnalysis::droppedPct() const { return hasDisplay() ? d_->stats.droppedPct : kNaN; }
-int CaptureAnalysis::vrrScore() const { return d_->vrr.score; }
+double CaptureAnalysis::vrrHz() const
+{
+	return d_->vrr.state == pml::metrics::VrrState::Off ? d_->vrr.hz : d_->vrr.medianHz;
+}
+double CaptureAnalysis::vrrSwingHz() const { return d_->vrr.swingHz; }
+double CaptureAnalysis::vrrLowHz() const { return d_->vrr.lowHz; }
+double CaptureAnalysis::vrrHighHz() const { return d_->vrr.highHz; }
+double CaptureAnalysis::vrrMaxHz() const { return d_->vrr.refreshHz; }
+double CaptureAnalysis::vrrUnevenPct() const
+{
+	return d_->vrr.state == pml::metrics::VrrState::NoData ? kNaN : d_->vrr.unevenPct;
+}
+int CaptureAnalysis::vrrSeverity() const { return pml::metrics::vrrStabilitySeverity(d_->vrr.stability); }
 QString CaptureAnalysis::vrrState() const { return QString::fromLatin1(pml::metrics::vrrStateLabel(d_->vrr.state)); }
-QString CaptureAnalysis::vrrVerdict() const { return QString::fromLatin1(pml::metrics::vrrVerdictLabel(d_->vrr.score)); }
+QString CaptureAnalysis::vrrVerdict() const { return QString::fromLatin1(pml::metrics::vrrStabilityLabel(d_->vrr.stability)); }
 QString CaptureAnalysis::vrrCause() const { return QString::fromLatin1(pml::metrics::vrrCauseLabel(d_->vrr.cause)); }
-QString CaptureAnalysis::vrrDetail() const
-{
-	const pml::metrics::VrrVerdict &v = d_->vrr;
-	if (v.state == pml::metrics::VrrState::NoData)
-		return {};
-	return QStringLiteral("Uneven frames %1 % (%2 % on screen only) · stutters %3 % · %4 frames")
-	    .arg(v.unevenPct, 0, 'f', 1)
-	    .arg(v.unevenDisplayPct, 0, 'f', 1)
-	    .arg(v.stutterPct, 0, 'f', 1)
-	    .arg(qulonglong(v.frames));
-}
-int CaptureAnalysis::experienceScore() const { return d_->experience.score; }
-int CaptureAnalysis::pacingScore() const { return d_->experience.pacingScore; }
-QString CaptureAnalysis::experienceVerdict() const
-{
-	return QString::fromLatin1(pml::metrics::experienceVerdictLabel(d_->experience.score));
-}
-QString CaptureAnalysis::experienceCause() const
-{
-	return QString::fromLatin1(pml::metrics::experienceCauseLabel(d_->experience.cause));
-}
-QString CaptureAnalysis::experienceDetail() const
-{
-	return QString::fromStdString(pml::metrics::experienceDetail(d_->experience));
-}
+QString CaptureAnalysis::vrrDetail() const { return pml::gui::vrrDetailText(d_->vrr); }
 FrameSeries *CaptureAnalysis::frameTimes() const { return &d_->frameTimes; }
 FrameSeries *CaptureAnalysis::displayTimes() const { return &d_->displayTimes; }
 QList<double> CaptureAnalysis::histogram() const { return d_->histogram; }

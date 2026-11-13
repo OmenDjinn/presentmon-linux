@@ -167,8 +167,10 @@ Latency at 100 fps, from the game's frame start to the first pixel (medians of 2
   second screen made every ~10th frame on the VRR screen arrive late, at multiples of 66.7 ms. The game's own
   frame times were steady. Pausing the animation restored even pacing. It was not HDR, not the cables, and not the
   other screen's VRR setting. If VRR pacing is uneven while the game is steady, look at what else renders.
-- **There is no standard for "VRR stability".** Our score counts screen-interval jumps larger than
-  max(2 ms, 25 % of the median). A 1.2 ms threshold counted the games' normal noise. Fixed refresh can be told
+- **There is no standard for "VRR stability".** Our readout counts screen-interval jumps larger than
+  max(2 ms, 25 % of the median): 5 % of the frame pairs is jittery, 15 % unstable. A 1.2 ms threshold counted the
+  games' normal noise. Show Hz, judge milliseconds: the same 2 ms step is 165 -> 124 Hz at 165 Hz and 60 -> 54 Hz at
+  60 Hz, so a swing in Hz reads large at high refresh rates while nobody sees it. Fixed refresh can be told
   apart from VRR by screen intervals snapping to a refresh grid while the game's don't (try the lowest common rate
   first: a 120 Hz grid also fits 240 Hz).
 
@@ -183,8 +185,8 @@ Latency at 100 fps, from the game's frame start to the first pixel (medians of 2
 - **One missed refresh is judder, not a hitch.** A frame shown for exactly two refreshes (90 fps on 120 Hz) must
   not count as a stutter, or judder is penalised twice.
 - **Report consistency separately from frame rate.** Players mean "frames come evenly" by smooth. A score that also
-  rewards frame rate makes a steady 60 fps look like a defect. presentmon-linux shows a pacing score (judder and
-  stutters only) next to the overall one.
+  rewards frame rate makes a steady 60 fps look like a defect. presentmon-linux showed a pacing score (judder and
+  stutters only) next to the overall one, until both gave way to the VRR readout (2026-11-13).
 - **Pacing needs its own scale.** Judder and stutter weighed lightly inside an overall score (fine next to frame
   rate and latency) compress a standalone pacing score: a visibly juddery 12/21 ms alternation still scored 89.
   At 3x it scores 67, against 89-95 for the same game evenly paced.
@@ -197,7 +199,7 @@ Latency at 100 fps, from the game's frame start to the first pixel (medians of 2
   - ITU-T G.1072 gives an input-delay curve.
 
   No study weighs smoothness against latency. That weight is a design choice; say so. Formula, citations and
-  validation: `docs/ARCHITECTURE.md` 3.4.3.
+  validation of the removed experience score: `docs/ARCHITECTURE.md` 3.4.3 as of commit `cfd545a`.
 
 ## 9. Measuring well
 
@@ -216,6 +218,6 @@ Latency at 100 fps, from the game's frame start to the first pixel (medians of 2
 ## AMD / Mesa
 
 Untested so far: the project was developed on NVIDIA. Mesa's RADV has `VK_EXT_present_timing` on Wayland from
-Mesa 26.1. Without it, display columns read NA and the scores stay empty, while frame times, CPU/GPU numbers and
+Mesa 26.1. Without it, display columns read NA and the VRR readout stays empty, while frame times, CPU/GPU numbers and
 the frame cap still work. AMD's Anti-Lag (`VK_AMD_anti_lag`, with a `maxFPS` field) would be the counterpart of the
 Reflex cap path; it is not implemented yet. Reports from AMD systems are welcome.

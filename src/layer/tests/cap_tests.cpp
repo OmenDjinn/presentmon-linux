@@ -114,6 +114,24 @@ TEST(CapRuntime, AutoFollowsTheVrrOutput)
 	EXPECT_EQ(rt.decide(nullptr, 2560, 1440).autoInfo.vrr, 0);
 }
 
+TEST(CapRuntime, VrrInfoForTheOverlay)
+{
+	// The overlay's VRR readout asks without any cap selected: the same pick as Auto, plus the EDID floor.
+	std::vector<pml::DrmOutput> outputs = {output("DP-1", 0, 120.0, 1440, 2560), output("DP-2", 1, 239.991, 2560, 1440)};
+	outputs[1].edidMinHz = 48;
+	CapRuntime rt([&] { return outputs; }, false);
+	EXPECT_EQ(rt.vrrInfo(2560, 1440, 1).vrr, 0) << "outputs not read yet";
+	rt.pollOutputs();
+	AutoCapInfo info = rt.vrrInfo(2560, 1440, 1);
+	EXPECT_EQ(info.vrr, 1);
+	EXPECT_NEAR(info.refreshHz, 239.991, 1e-9);
+	EXPECT_EQ(info.vrrMinHz, 48.0);
+	EXPECT_EQ(rt.decide(nullptr, 2560, 1440).fps, 0.0) << "asking caps nothing";
+	outputs[1].enabled = 0;
+	rt.pollOutputs();
+	EXPECT_EQ(rt.vrrInfo(2560, 1440, 1).vrr, 2);
+}
+
 TEST(CapRuntime, PickVrrOutputBySize)
 {
 	// VRR "Always" on two outputs: the one matching the swapchain wins, then the orientation, then the refresh.

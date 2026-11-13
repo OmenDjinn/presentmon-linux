@@ -350,23 +350,18 @@ Kirigami.Page {
                     VrrPanel {
                         Layout.fillWidth: true
                         visible: single.a && single.a.loaded && single.a.hasDisplay
-                        score: single.a ? single.a.vrrScore : -1
+                        live: false
+                        hz: single.a ? single.a.vrrHz : NaN
+                        swingHz: single.a ? single.a.vrrSwingHz : NaN
+                        lowHz: single.a ? single.a.vrrLowHz : NaN
+                        highHz: single.a ? single.a.vrrHighHz : NaN
+                        maxHz: single.a ? single.a.vrrMaxHz : NaN
+                        severity: single.a ? single.a.vrrSeverity : -1
                         state_: single.a ? single.a.vrrState : ""
                         verdict: single.a ? single.a.vrrVerdict : ""
                         cause: single.a ? single.a.vrrCause : ""
                         detail: single.a ? single.a.vrrDetail : ""
-                        source: "A recording does not say whether VRR was on; judged as if it were."
-                    }
-
-                    ExperiencePanel {
-                        Layout.fillWidth: true
-                        visible: single.a && single.a.loaded && single.a.hasDisplay
-                        score: single.a ? single.a.experienceScore : -1
-                        pacing: single.a ? single.a.pacingScore : -1
-                        verdict: single.a ? single.a.experienceVerdict : ""
-                        cause: single.a ? single.a.experienceCause : ""
-                        detail: single.a ? single.a.experienceDetail : ""
-                        source: "Judder and latency need the MsAnimationError and display latency columns; without them those terms count 0."
+                        source: "A recording does not say whether VRR was on; judged as if it were, over the whole recording."
                     }
 
                     ChartPanel {

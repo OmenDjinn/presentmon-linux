@@ -36,9 +36,6 @@ its full license text there; parts of them are compiled into the binaries.
   uses it.
 - **Vulkan headers:** The Khronos Group Inc., Apache-2.0 OR MIT, through Granite.
 
-## Research the scores rest on
+## Metrics by others
 
-- **Experience score:** the thresholds come from published studies (Tokey et al. 2025 and 2026, Klein et al. 2024,
-  Xu & Claypool 2024, Ivkovic et al. 2015) and ITU-T Recommendation G.1072. Citations are in
-  `docs/ARCHITECTURE.md`, 3.4.3.
 - **GQI:** the Gaming Quality Index is Blackbird PC Tech's metric.

@@ -28,8 +28,6 @@ struct CaptureData
 	std::vector<float> frameMs;    // frame time; NaN where the row has none (NA)
 	std::vector<float> displayMs;  // time between display changes (MsBetweenDisplayChange, or the
 	                               // v2 DisplayedTime of the previous frame); NaN = not displayed / NA
-	std::vector<float> animationErrorMs;  // MsAnimationError / v2 AnimationError; NaN = NA or no column
-	std::vector<float> latencyMs;  // display latency: v2 DisplayLatency, else MsUntilDisplayed + MsCPUBusy; NaN = NA
 	bool hasDisplay = false;       // a display column exists and has values
 	size_t droppedFrames = 0;      // rows whose display column is NA or 0 while the column has values
 	std::vector<std::string> warnings;  // e.g. several processes in one file

@@ -46,18 +46,18 @@ class CaptureAnalysis : public QObject
 	Q_PROPERTY(bool hasDisplay READ hasDisplay NOTIFY loadedChanged)
 	Q_PROPERTY(double displayFps READ displayFps NOTIFY loadedChanged)
 	Q_PROPERTY(double droppedPct READ droppedPct NOTIFY loadedChanged)
-	// VRR verdict (pml/metrics/vrr.hpp) of the whole capture, without the driver's VRR state.
-	Q_PROPERTY(int vrrScore READ vrrScore NOTIFY loadedChanged)
+	// VRR readout (pml/metrics/vrr.hpp) of the whole capture, without the driver's VRR state; Hz NaN without data.
+	Q_PROPERTY(double vrrHz READ vrrHz NOTIFY loadedChanged)              // median per-frame rate (the fixed rate if VRR looks off)
+	Q_PROPERTY(double vrrSwingHz READ vrrSwingHz NOTIFY loadedChanged)    // ± (5th to 95th percentile, halved)
+	Q_PROPERTY(double vrrLowHz READ vrrLowHz NOTIFY loadedChanged)
+	Q_PROPERTY(double vrrHighHz READ vrrHighHz NOTIFY loadedChanged)
+	Q_PROPERTY(double vrrMaxHz READ vrrMaxHz NOTIFY loadedChanged)        // the refresh grid found, NaN = none
+	Q_PROPERTY(double vrrUnevenPct READ vrrUnevenPct NOTIFY loadedChanged)  // pairs of screen updates with a jump, percent
+	Q_PROPERTY(int vrrSeverity READ vrrSeverity NOTIFY loadedChanged)     // 0 fine, 1 worth a look, 2 bad, -1 none
 	Q_PROPERTY(QString vrrState READ vrrState NOTIFY loadedChanged)
 	Q_PROPERTY(QString vrrVerdict READ vrrVerdict NOTIFY loadedChanged)
 	Q_PROPERTY(QString vrrCause READ vrrCause NOTIFY loadedChanged)
 	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY loadedChanged)
-	// Experience score (pml/metrics/experience.hpp) over the same frames.
-	Q_PROPERTY(int experienceScore READ experienceScore NOTIFY loadedChanged)           // 0-100, -1 = none
-	Q_PROPERTY(int pacingScore READ pacingScore NOTIFY loadedChanged)                   // judder + stutters only, -1 = none
-	Q_PROPERTY(QString experienceVerdict READ experienceVerdict NOTIFY loadedChanged)   // "smooth" ... "very rough"
-	Q_PROPERTY(QString experienceCause READ experienceCause NOTIFY loadedChanged)       // main cause, "" from 85 up
-	Q_PROPERTY(QString experienceDetail READ experienceDetail NOTIFY loadedChanged)     // the numbers behind the score
 
 	// x = seconds since the first frame, y = ms.
 	Q_PROPERTY(FrameSeries *frameTimes READ frameTimes CONSTANT)
@@ -95,16 +95,17 @@ public:
 	bool hasDisplay() const;
 	double displayFps() const;
 	double droppedPct() const;
-	int vrrScore() const;
+	double vrrHz() const;
+	double vrrSwingHz() const;
+	double vrrLowHz() const;
+	double vrrHighHz() const;
+	double vrrMaxHz() const;
+	double vrrUnevenPct() const;
+	int vrrSeverity() const;
 	QString vrrState() const;
 	QString vrrVerdict() const;
 	QString vrrCause() const;
 	QString vrrDetail() const;
-	int experienceScore() const;
-	int pacingScore() const;
-	QString experienceVerdict() const;
-	QString experienceCause() const;
-	QString experienceDetail() const;
 	FrameSeries *frameTimes() const;
 	FrameSeries *displayTimes() const;
 	QList<double> histogram() const;

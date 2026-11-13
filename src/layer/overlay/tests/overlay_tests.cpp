@@ -182,28 +182,37 @@ TEST(Stats, GpuNumbersArePresentMonsGpuMetrics)
 	EXPECT_NEAR(s.gpuLatencyMs, 8.333333 - 0.1 - 2.0, 1e-3);
 }
 
-TEST(Stats, VrrVerdictFromTheDisplayedFrames)
+TEST(Stats, VrrReadoutFromTheDisplayedFrames)
 {
-	// Steady presents every 6 ms. First shown evenly, then every tenth frame 3 ms late (the screen waits,
-	// then catches up), as Lies of P under vkd3d-proton showed with VRR on.
-	auto run = [](bool uneven) {
+	// Steady presents every 6 ms. Shown evenly, or with every tenth frame 3 ms late (the screen waits, then
+	// catches up), as Lies of P under vkd3d-proton showed with VRR on; or late only in the first seconds.
+	using pml::metrics::VrrStability;
+	auto run = [](uint64_t unevenUntil) {
 		OverlayStats stats(makeInfo(), 1, kT0);
 		const uint64_t period = 6'000'000;
 		for (uint64_t n = 1; n <= 1200; n++)
-			stats.push(frame(n, period, (uneven && n % 10 == 0) ? 7'000'000 : 4'000'000));
+			stats.push(frame(n, period, (n <= unevenUntil && n % 10 == 0) ? 7'000'000 : 4'000'000));
 		pml::metrics::VrrContext ctx;
 		ctx.refreshHz = 240;
 		ctx.driver = pml::metrics::DriverVrr::On;
 		stats.setVrrContext(ctx);
 		stats.update(kT0 + 1200 * period + 20'000'000);
-		return stats.snapshot().vrr;
+		return stats.snapshot();
 	};
-	const pml::metrics::VrrVerdict even = run(false);
-	EXPECT_EQ(even.state, pml::metrics::VrrState::Active);
-	EXPECT_GE(even.score, 95);
-	const pml::metrics::VrrVerdict bad = run(true);
-	EXPECT_LT(bad.score, 65);
-	EXPECT_EQ(bad.cause, pml::metrics::VrrCause::Display);
+	const Snapshot even = run(0);
+	EXPECT_EQ(even.vrr.state, pml::metrics::VrrState::Active);
+	EXPECT_EQ(even.vrr.stability, VrrStability::Stable);
+	EXPECT_NEAR(even.vrr.hz, 166.7, 0.5);
+	EXPECT_LT(even.vrr.swingHz, 1.0);
+	EXPECT_NE(snapshotSummary(even, true).find("vrr=stable"), std::string::npos) << snapshotSummary(even, true);
+
+	const Snapshot bad = run(1200);
+	EXPECT_EQ(bad.vrr.stability, VrrStability::Unstable);
+	EXPECT_EQ(bad.vrr.cause, pml::metrics::VrrCause::Display);
+	EXPECT_GT(bad.vrr.swingHz, 40.0) << "the panel runs at 111 Hz for one frame and 333 Hz for the next";
+
+	// Uneven for the first 4.8 s, even for the last 2.4 s: the live readout has recovered.
+	EXPECT_EQ(run(800).vrr.stability, VrrStability::Stable);
 }
 
 TEST(Stats, IdleWhenNothingArrives)

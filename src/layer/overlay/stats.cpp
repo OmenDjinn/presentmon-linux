@@ -115,8 +115,6 @@ void OverlayStats::addDisplayRow(const pml::metrics::Row &row)
 	d.untilDisplayedMs = float(m.msUntilDisplayed);
 	d.displayLatencyMs = float(m.msDisplayLatency);
 	d.betweenPresentsMs = float(m.msBetweenPresents);
-	if (!IsMissingFrameMetricValue(m.msAnimationError))
-		d.animationErrorMs = float(m.msAnimationError);
 	if (!IsMissingFrameMetricValue(m.msReadyTimeToDisplayLatency) && m.msReadyTimeToDisplayLatency >= 0)
 		d.readyToScreenMs = float(m.msReadyTimeToDisplayLatency);
 	displayed_.push_back(d);
@@ -275,21 +273,15 @@ void OverlayStats::recompute(uint64_t nowNs)
 		if (readyN)
 			s.readyToScreenMs = ready / double(readyN);
 
-		// VRR verdict over the displayed frames of the long window: a steady reading rather than a
-		// per-second one (single hitches should move it, not dominate it).
+		// VRR readout: the state from the displayed frames of the long window (telling fixed refresh from VRR
+		// needs many frames), the refresh rate now and its swing from the newest ones (pml::metrics::kVrrLive).
 		vrrScratch_.clear();
 		for (const DisplaySample &d : displayed_)
 			vrrScratch_.push_back({d.betweenPresentsMs, d.betweenDisplayMs});
 		pml::metrics::VrrContext ctx = vrrContext_;
 		if (ctx.refreshHz <= 0 && info_.refreshDurationNs)
 			ctx.refreshHz = 1e9 / double(info_.refreshDurationNs);
-		s.vrr = pml::metrics::analyzeVrr(vrrScratch_, ctx);
-
-		// Experience score over the same frames (pml/metrics/experience.hpp).
-		experienceScratch_.clear();
-		for (const DisplaySample &d : displayed_)
-			experienceScratch_.push_back({d.betweenDisplayMs, d.animationErrorMs, d.displayLatencyMs});
-		s.experience = pml::metrics::analyzeExperience(experienceScratch_);
+		s.vrr = pml::metrics::analyzeVrr(vrrScratch_, ctx, pml::metrics::kVrrLive);
 	}
 
 	if (s.idle)

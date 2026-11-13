@@ -26,6 +26,7 @@
 #include "stats.hpp"
 #include "ui.hpp"
 
+#include "../frame_cap.hpp"
 #include "../log.hpp"
 #include "../present_chain.hpp"
 
@@ -336,6 +337,7 @@ struct OvSwapchain
 	bool wasVisible = true;
 	uint64_t presents = 0;
 	uint64_t lastFrameNs = 0;
+	uint64_t vrrContextNs = 0;    // last time the VRR readout got the outputs' VRR state
 	bool warnedNoGraphics = false;
 };
 
@@ -593,6 +595,24 @@ bool initImGui(OvSwapchain &s, VkQueue queue, uint32_t family)
 	return true;
 }
 
+// The VRR readout's context from what the outputs say: VRR on (with that output's refresh and EDID floor), off on
+// every readable output, or unknown (not read yet, DRM unreadable). Off leaves the refresh to the swapchain's.
+pml::metrics::VrrContext vrrContextFrom(const AutoCapInfo &info)
+{
+	pml::metrics::VrrContext c;
+	if (info.vrr == 1)
+	{
+		c.driver = pml::metrics::DriverVrr::On;
+		c.refreshHz = info.refreshHz;
+		c.vrrMinHz = info.vrrMinHz;
+	}
+	else if (info.vrr == 2)
+	{
+		c.driver = pml::metrics::DriverVrr::Off;
+	}
+	return c;
+}
+
 // gImguiMutex held, context current. Bakes every printable glyph at the current scale, so the atlas
 // is complete before the first visible frame and no glyph is added mid-frame later. The atlas is
 // uploaded by the next serveTextures, in the present's own command buffer.
@@ -608,8 +628,12 @@ void warmUp(OvSwapchain &s, float scale)
 		ImGui::NewFrame();
 		ImGui::PushFont(s.font, px);
 		if (ImFontBaked *baked = ImGui::GetFont()->GetFontBaked(px))
+		{
 			for (const char *c = glyphWarmupText(); *c; c++)
 				baked->FindGlyph(ImWchar(*c));
+			for (unsigned g : kWarmupExtraGlyphs)
+				baked->FindGlyph(ImWchar(g));
+		}
 		Snapshot empty;
 		UiParams up;
 		up.snapshot = &empty;
@@ -1415,6 +1439,14 @@ static void onPresentImpl(PresentContext &ctx)
 		collectGarbage(*s, false);
 
 		const uint64_t now = pml::monotonicNs();
+		const uint32_t panels = s->control.panels ? s->control.panels : kDefaultPanels;
+		if ((panels & pml::kPanelVrr) && now - s->vrrContextNs >= 250'000'000)
+		{
+			// The driver's VRR state from DRM (CapRuntime's output thread, which reads it while asked), so the readout
+			// knows VRR is on instead of guessing from the timing, and knows the panel's floor (LFC).
+			s->vrrContextNs = now;
+			s->stats->setVrrContext(vrrContextFrom(CapRuntime::get().vrrInfo(s->width, s->height, now)));
+		}
 		s->stats->update(now);
 
 		const float scale = effectiveScale(s->control, s->width, s->height);
@@ -1428,7 +1460,7 @@ static void onPresentImpl(PresentContext &ctx)
 
 		UiParams up;
 		up.snapshot = &s->stats->snapshot();
-		up.panels = s->control.panels ? s->control.panels : kDefaultPanels;
+		up.panels = panels;
 		up.position = s->control.position;
 		up.scale = scale;
 		up.displayWidth = float(s->width);

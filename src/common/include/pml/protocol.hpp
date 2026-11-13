@@ -100,9 +100,9 @@ enum OverlayPanel : uint32_t
 	kPanelLatency = 1u << 4,         // display latency, render-present latency, until-displayed
 	kPanelSwapchain = 1u << 5,       // runtime, present mode, size, format / HDR, timing stage
 	kPanelDropped = 1u << 6,         // dropped (not displayed) frames
-	kPanelVrr = 1u << 7,             // VRR stability score and verdict (pml/metrics/vrr.hpp)
+	kPanelVrr = 1u << 7,             // VRR readout: refresh rate now, swing, verdict (pml/metrics/vrr.hpp)
 	kPanelCap = 1u << 8,             // frame cap: target, method, wait per frame
-	kPanelExperience = 1u << 9,      // experience score and verdict (pml/metrics/experience.hpp)
+	// 1u << 9 was the experience score (removed 2026-11-13); the layer ignores the bit.
 };
 
 // FrameRecord::flags

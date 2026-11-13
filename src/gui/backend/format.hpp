@@ -3,6 +3,7 @@
 // file names. No QML types here.
 #pragma once
 
+#include <pml/metrics/vrr.hpp>
 #include <pml/protocol.hpp>
 
 #include <QDateTime>
@@ -24,6 +25,10 @@ QString runtimeName(const pml::SwapchainInfo &info);
 
 // One line for a swapchain: "2560×1440 · FIFO · HDR10 (PQ) · DXVK".
 QString swapchainSummary(const pml::SwapchainInfo &info);
+
+// The numbers behind a VRR readout, one line: "5th–95th percentile 134–148 Hz · uneven 3.1 % (2.9 % on screen
+// only) · 1 stutter · 333 frames in 2.0 s". Empty without data.
+QString vrrDetailText(const pml::metrics::VrrReadout &readout);
 
 // Capture file name in Intel PresentMon's style: "pmcap-<exe>-YYMMDD-HHMMSS.csv", with characters
 // that are awkward in file names replaced by '_'.

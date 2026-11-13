@@ -7,6 +7,8 @@
 
 #include <QRegularExpression>
 
+#include <cmath>
+
 namespace pml::gui {
 
 QString presentModeName(uint32_t vkPresentMode)
@@ -109,6 +111,33 @@ bool parseCaptureFileName(const QString &fileName, QString *processName, QDateTi
 	if (when)
 		*when = t;
 	return true;
+}
+
+QString vrrDetailText(const pml::metrics::VrrReadout &v)
+{
+	using pml::metrics::VrrState;
+	if (v.state == VrrState::NoData)
+		return {};
+	if (v.state == VrrState::Off)
+	{
+		if (std::isnan(v.onGridPct))
+			return QStringLiteral("%1 frames").arg(qulonglong(v.frames));
+		return QStringLiteral("%1 % of the screen updates on the %2 Hz grid · %3 frames")
+		    .arg(v.onGridPct, 0, 'f', 1)
+		    .arg(v.refreshHz, 0, 'f', 0)
+		    .arg(qulonglong(v.frames));
+	}
+	QString detail = QStringLiteral("5th–95th percentile %1–%2 Hz · uneven %3 % (%4 % on screen only) · %5 %6")
+	                     .arg(v.lowHz, 0, 'f', 0)
+	                     .arg(v.highHz, 0, 'f', 0)
+	                     .arg(v.unevenPct, 0, 'f', 1)
+	                     .arg(v.unevenDisplayPct, 0, 'f', 1)
+	                     .arg(qulonglong(v.stutters))
+	                     .arg(v.stutters == 1 ? QStringLiteral("stutter") : QStringLiteral("stutters"));
+	if (!std::isnan(v.lfcCrossings))
+		detail += QStringLiteral(" · %1 LFC crossings").arg(qulonglong(v.lfcCrossings));
+	detail += QStringLiteral(" · %1 frames in %2 s").arg(qulonglong(v.judgedFrames)).arg(v.judgedSeconds, 0, 'f', 1);
+	return detail;
 }
 
 } // namespace pml::gui

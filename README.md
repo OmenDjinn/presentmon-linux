@@ -15,7 +15,7 @@ Status: M1 (CLI + overlay) and M2's GPU columns (GPU busy / wait / latency / tim
 adds around each queue submission; `PRESENTMON_GPU=0` turns them off). Input/click-to-photon columns are NA.
 Tested under Proton with D3D11 and D3D12 test programs (GE-Proton 11 with DXVK 3.1.1, DXVK 2.5.1, and
 proton-wineland's vkd3d-proton), and live in Lies of P (vkd3d-proton). Also: a frame rate cap that waits where the
-game is paced (`presentmon cap`), and two 0-100 scores, VRR stability and an experience score.
+game is paced (`presentmon cap`), and a VRR readout like a monitor's refresh-rate counter.
 
 Credits: built on [Intel PresentMon](https://github.com/GameTechDev/PresentMon) (its metrics code runs unmodified),
 [PyroFling](https://github.com/Themaister/pyrofling) by Hans-Kristian Arntzen (the present-timing
@@ -181,10 +181,11 @@ Environment (set on the game):
 
 Runtime control from another terminal: `presentmon overlay toggle` (or show/hide/status, `--position`, `--scale`).
 
-Two scores on the overlay and in the GUI, both out of 100 with a verdict and a main cause: **VRR** (how evenly frames
-reach a VRR screen) and **Exp** (experience: frame rate shown, judder, stutters and latency together; how it is built
-and validated: `docs/ARCHITECTURE.md` 3.4.3), with **pace** next to it: consistency alone (judder and stutters),
-the same for a steady 60 and a steady 240 fps. The FPS section also shows Blackbird PC Tech's GQI next to the lows.
+The **VRR** row works like a monitor's refresh-rate counter: the refresh rate now (last 250 ms), how far it swings
+(±, last 2 s) and a verdict: stable, varying, at max, jittery, stutter, LFC or unstable, with the cause when it
+jitters (`VRR    141 Hz  ±3   stable`; `off  fixed 120 Hz` without VRR). The GUI shows the same with a bar over the
+screen's VRR range; how it is judged: `docs/ARCHITECTURE.md` 3.4.1. The FPS section also shows Blackbird PC Tech's
+GQI next to the lows.
 
 ### Global shortcut in KDE (instructions, not configured)
 

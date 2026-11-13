@@ -19,6 +19,7 @@ namespace {
 constexpr uint64_t kReportEveryNs = 250'000'000ull;
 constexpr auto kPollEvery = std::chrono::milliseconds(500);
 constexpr auto kIdleEvery = std::chrono::milliseconds(100);   // Auto not selected: only watch for it
+constexpr uint64_t kWantedForNs = 2'000'000'000ull;           // vrrInfo() keeps the outputs read this long
 
 CapRuntime *g_runtime = nullptr;   // the process's runtime, for the fork handlers
 
@@ -144,18 +145,19 @@ void CapRuntime::ensureThread()
 			pthread_setname_np(pthread_self(), "pml-cap-drm");
 			for (;;)
 			{
-				const bool autoSelected = currentMode() == uint32_t(pml::CapMode::Auto);
-				if (autoSelected)
+				const bool wanted = currentMode() == uint32_t(pml::CapMode::Auto) ||
+				                    pml::monotonicNs() < outputsWantedUntilNs_.load(std::memory_order_relaxed);
+				if (wanted)
 					pollOutputs();
 				else
 					forgetOutputs();
-				std::this_thread::sleep_for(autoSelected ? kPollEvery : kIdleEvery);
+				std::this_thread::sleep_for(wanted ? kPollEvery : kIdleEvery);
 			}
 		}).detach();
 	}
 	catch (...)
 	{
-		PML_LOG_ONCE(LogLevel::Warn, "frame cap: cannot start the output thread; auto cap unavailable");
+		PML_LOG_ONCE(LogLevel::Warn, "frame cap: cannot start the output thread; auto cap and the overlay's VRR state unavailable");
 	}
 }
 
@@ -202,6 +204,13 @@ AutoCapInfo CapRuntime::autoInfoFor(uint32_t width, uint32_t height)
 		readable = readable || o.enabled >= 0;
 	info.vrr = readable ? 2 : 0;
 	return info;
+}
+
+AutoCapInfo CapRuntime::vrrInfo(uint32_t width, uint32_t height, uint64_t nowNs)
+{
+	outputsWantedUntilNs_.store(nowNs + kWantedForNs, std::memory_order_relaxed);
+	ensureThread();
+	return autoInfoFor(width, height);
 }
 
 CapDecision CapRuntime::decide(pml::Segment *segment, uint32_t width, uint32_t height)

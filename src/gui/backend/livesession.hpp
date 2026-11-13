@@ -60,19 +60,20 @@ class LiveSession : public QObject
 	Q_PROPERTY(double readyToScreenMs READ readyToScreenMs NOTIFY statsChanged)
 	Q_PROPERTY(double droppedPct READ droppedPct NOTIFY statsChanged)
 	Q_PROPERTY(qulonglong lostRecords READ lostRecords NOTIFY statsChanged)  // ring records overwritten before read
-	// VRR verdict (pml/metrics/vrr.hpp) over the last 10 s of displayed frames, with the driver's VRR state.
-	Q_PROPERTY(int vrrScore READ vrrScore NOTIFY statsChanged)            // 0-100, -1 = none
+	// VRR readout (pml/metrics/vrr.hpp, kVrrLive), with the driver's VRR state: the refresh rate now (last 250 ms),
+	// its swing and the verdict (last 2 s), the state (last 10 s). Hz values are NaN without data.
+	Q_PROPERTY(double vrrHz READ vrrHz NOTIFY statsChanged)               // now; the fixed rate when VRR is off
+	Q_PROPERTY(double vrrSwingHz READ vrrSwingHz NOTIFY statsChanged)     // ± around it
+	Q_PROPERTY(double vrrLowHz READ vrrLowHz NOTIFY statsChanged)         // 5th percentile of the per-frame rates
+	Q_PROPERTY(double vrrHighHz READ vrrHighHz NOTIFY statsChanged)       // 95th percentile
+	Q_PROPERTY(double vrrMinHz READ vrrMinHz NOTIFY statsChanged)         // the panel's VRR floor (EDID), NaN = unknown
+	Q_PROPERTY(double vrrMaxHz READ vrrMaxHz NOTIFY statsChanged)         // the refresh rate (VRR maximum), NaN = unknown
+	Q_PROPERTY(int vrrSeverity READ vrrSeverity NOTIFY statsChanged)      // 0 fine, 1 worth a look, 2 bad, -1 none
 	Q_PROPERTY(QString vrrState READ vrrState NOTIFY statsChanged)        // "no data", "unknown", "off", "idle", "active"
-	Q_PROPERTY(QString vrrVerdict READ vrrVerdict NOTIFY statsChanged)    // "stable" ... "very unstable", "" without score
-	Q_PROPERTY(QString vrrCause READ vrrCause NOTIFY statsChanged)        // main cause, "" when stable
-	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY statsChanged)      // the numbers behind the score
+	Q_PROPERTY(QString vrrVerdict READ vrrVerdict NOTIFY statsChanged)    // "stable", "jittery", "unstable", ...; "" without data
+	Q_PROPERTY(QString vrrCause READ vrrCause NOTIFY statsChanged)        // when jittery or unstable, else ""
+	Q_PROPERTY(QString vrrDetail READ vrrDetail NOTIFY statsChanged)      // the numbers behind the verdict
 	Q_PROPERTY(QString vrrSource READ vrrSource NOTIFY statsChanged)      // what the driver says, and where
-	// Experience score (pml/metrics/experience.hpp) over the same frames.
-	Q_PROPERTY(int experienceScore READ experienceScore NOTIFY statsChanged)           // 0-100, -1 = none
-	Q_PROPERTY(int pacingScore READ pacingScore NOTIFY statsChanged)                   // judder + stutters only, -1 = none
-	Q_PROPERTY(QString experienceVerdict READ experienceVerdict NOTIFY statsChanged)   // "smooth" ... "very rough"
-	Q_PROPERTY(QString experienceCause READ experienceCause NOTIFY statsChanged)       // main cause, "" from 85 up
-	Q_PROPERTY(QString experienceDetail READ experienceDetail NOTIFY statsChanged)     // the numbers behind the score
 
 	// x = seconds since the session attached, y = ms. Trimmed to historySeconds.
 	Q_PROPERTY(FrameSeries *frameTimes READ frameTimes CONSTANT)    // MsBetweenPresents, one point per present
@@ -116,17 +117,18 @@ public:
 	double readyToScreenMs() const;
 	double droppedPct() const;
 	qulonglong lostRecords() const;
-	int vrrScore() const;
+	double vrrHz() const;
+	double vrrSwingHz() const;
+	double vrrLowHz() const;
+	double vrrHighHz() const;
+	double vrrMinHz() const;
+	double vrrMaxHz() const;
+	int vrrSeverity() const;
 	QString vrrState() const;
 	QString vrrVerdict() const;
 	QString vrrCause() const;
 	QString vrrDetail() const;
 	QString vrrSource() const;
-	int experienceScore() const;
-	int pacingScore() const;
-	QString experienceVerdict() const;
-	QString experienceCause() const;
-	QString experienceDetail() const;
 
 	FrameSeries *frameTimes() const;
 	FrameSeries *displayTimes() const;

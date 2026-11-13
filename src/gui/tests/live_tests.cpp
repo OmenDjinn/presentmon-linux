@@ -262,8 +262,7 @@ TEST(ProcessModel, OverlaySettersReachTheProducerSide)
 	EXPECT_EQ(pml::readOverlayControl(p.segment()).panels, 0u);
 	// Unknown bits are masked off: only the panels the overlay knows reach the shared control block.
 	const uint32_t known = pml::kPanelFps | pml::kPanelFrameTimeGraph | pml::kPanelCpu | pml::kPanelGpu |
-	                       pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr | pml::kPanelCap |
-	                       pml::kPanelExperience;
+	                       pml::kPanelLatency | pml::kPanelSwapchain | pml::kPanelDropped | pml::kPanelVrr | pml::kPanelCap;
 	EXPECT_TRUE(model.setOverlayPanels(pid, 0x7fffffff));
 	EXPECT_EQ(pml::readOverlayControl(p.segment()).panels, known);
 	EXPECT_TRUE(model.setOverlayPanels(pid, 0));
@@ -808,7 +807,7 @@ TEST(LiveSession, TimerDrivenAttachFollowsARealtimeProducer)
 }
 
 // ---------------------------------------------------------------------------------------
-// VRR verdict: the outputs' driver state (drmvrr.hpp) and the session's numbers
+// VRR readout: the outputs' driver state (drmvrr.hpp) and the session's numbers
 // ---------------------------------------------------------------------------------------
 
 TEST(DrmVrr, EdidRangeDescriptor)
@@ -846,7 +845,7 @@ TEST(DrmVrr, TheOutputWithVrrOnIsTheGames)
 	EXPECT_EQ(pml::gui::vrrContextFromOutputs({unreadable, dp2}).driver, pml::metrics::DriverVrr::Unknown);
 }
 
-TEST(LiveSession, VrrVerdictWithTheDriversState)
+TEST(LiveSession, VrrReadoutWithTheDriversState)
 {
 	FakeProducer p;
 	ASSERT_TRUE(p.ok()) << p.error();
@@ -870,8 +869,14 @@ TEST(LiveSession, VrrVerdictWithTheDriversState)
 	p.publish(recs);
 	s.tickForTest(recs.back().presentStartNs + 20 * kMs);
 	EXPECT_EQ(s.vrrState(), "active");
-	EXPECT_GE(s.vrrScore(), 0);
-	EXPECT_LT(s.vrrScore(), 65);
+	EXPECT_EQ(s.vrrVerdict(), "unstable");
+	EXPECT_EQ(s.vrrSeverity(), 2);
+	EXPECT_NEAR(s.vrrHz(), 166.7, 8.0) << "ten frames in 60 ms, give or take the slice edge";
+	EXPECT_NEAR(s.vrrLowHz(), 111.1, 1.0);
+	EXPECT_NEAR(s.vrrHighHz(), 333.3, 1.0);
+	EXPECT_NEAR(s.vrrSwingHz(), (333.3 - 111.1) / 2, 1.0);
+	EXPECT_EQ(s.vrrMinHz(), 48.0);
+	EXPECT_EQ(s.vrrMaxHz(), 240.0);
 	EXPECT_EQ(s.vrrCause(), "uneven on screen, game steady");
 	EXPECT_TRUE(s.vrrSource().contains("VRR on, DP-2, 48–240 Hz")) << s.vrrSource().toStdString();
 	EXPECT_TRUE(s.vrrDetail().contains("on screen only")) << s.vrrDetail().toStdString();

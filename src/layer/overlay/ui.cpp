@@ -16,6 +16,8 @@ constexpr ImU32 kValue = IM_COL32(255, 255, 255, 255);
 constexpr ImU32 kUnit = IM_COL32(190, 200, 215, 255);
 constexpr ImU32 kNaCol = IM_COL32(110, 115, 125, 255);
 constexpr ImU32 kWarn = IM_COL32(255, 190, 90, 255);
+constexpr ImU32 kGood = IM_COL32(120, 225, 130, 255);
+constexpr ImU32 kBad = IM_COL32(255, 105, 95, 255);
 constexpr ImU32 kGraphPresent = IM_COL32(110, 220, 120, 255);
 constexpr ImU32 kGraphDisplay = IM_COL32(255, 165, 70, 255);
 
@@ -61,6 +63,8 @@ std::string snapshotSummary(const Snapshot &s, bool displayTiming)
 		return std::string(buf);
 	};
 	const bool d = displayTiming && s.hasDisplayInfo;
+	std::string vrr = pml::metrics::vrrStabilityLabel(s.vrr.stability);
+	std::replace(vrr.begin(), vrr.end(), ' ', '_');   // "at max" -> "at_max": one token per value
 	std::string out = "present_fps=" + f(s.presentFps, "%.1f") + " shown_fps=" + f(d ? s.displayFps : kNA, "%.1f") +
 	                  " avg_ms=" + f(s.avgMs, "%.2f") + " p99_ms=" + f(s.p99Ms, "%.2f") +
 	                  " low1_fps=" + f(s.low1Fps, "%.1f") + " low01_fps=" + f(s.low01Fps, "%.1f") + " gqi=" + f(s.gqi, "%.2f") +
@@ -71,9 +75,8 @@ std::string snapshotSummary(const Snapshot &s, bool displayTiming)
 	                  " until_displayed_ms=" + f(d ? s.untilDisplayedMs : kNA, "%.2f") +
 	                  " ready_to_screen_ms=" + f(d ? s.readyToScreenMs : kNA, "%.2f") +
 	                  " dropped_pct=" + f(d ? s.droppedPct : kNA, "%.1f") +
-	                  " vrr_state=" + pml::metrics::vrrStateLabel(s.vrr.state) + " vrr_score=" + std::to_string(s.vrr.score) +
-	                  " experience_score=" + std::to_string(s.experience.score) +
-	                  " pacing_score=" + std::to_string(s.experience.pacingScore) +
+	                  " vrr_state=" + pml::metrics::vrrStateLabel(s.vrr.state) + " vrr_hz=" + f(s.vrr.hz, "%.1f") +
+	                  " vrr_swing_hz=" + f(s.vrr.swingHz, "%.1f") + " vrr=" + (vrr.empty() ? std::string("NA") : vrr) +
 	                  " rows=" + std::to_string(s.rowsTotal);
 	return out;
 }
@@ -257,13 +260,15 @@ void drawOverlayUi(const UiParams &p)
 
 	if (p.panels & pml::kPanelVrr)
 	{
-		// "VRR   on    43/100  unstable" (on / ? / idle) and the main cause below it; "VRR   off   fixed 120 Hz".
-		// In the game the driver's VRR state is unknown: "on" only when the screen visibly follows the game
-		// off a known refresh grid, "off" when it visibly snaps to one, "?" when it cannot be told.
+		// Like a monitor's refresh-rate OSD: "VRR    141 Hz  ±3   stable" (the rate over the last 250 ms, its swing
+		// and the verdict over the last 2 s), the cause below when jittery or unstable; "VRR    off    fixed 120 Hz".
+		// The driver's VRR state comes from DRM (CapRuntime::vrrInfo). Without it (DRM unreadable in the game's
+		// container): "VRR?" when the data cannot tell (no known refresh, or the game itself on the refresh grid),
+		// "off" when the screen visibly snaps to a fixed grid.
 		using pml::metrics::VrrState;
-		const pml::metrics::VrrVerdict &v = s.vrr;
-		label("VRR   ", true);
-		if (!have || !s.hasDisplayInfo || v.state == VrrState::NoData)
+		const pml::metrics::VrrReadout &v = s.vrr;
+		label(v.state == VrrState::Unknown && have && s.hasDisplayInfo ? "VRR?  " : "VRR   ", true);
+		if (!have || !s.hasDisplayInfo || v.state == VrrState::NoData || isNA(v.hz))
 		{
 			value(na, "", "");
 			if (have && !s.hasDisplayInfo)
@@ -271,60 +276,29 @@ void drawOverlayUi(const UiParams &p)
 		}
 		else if (v.state == VrrState::Off)
 		{
-			part(kWarn, "off");
+			part(kWarn, " off   ");
 			if (!isNA(v.refreshHz))
 			{
 				char buf[32];
-				std::snprintf(buf, sizeof(buf), "   fixed %.0f Hz", v.refreshHz);
+				std::snprintf(buf, sizeof(buf), " fixed %.0f Hz", v.refreshHz);
 				part(kLabel, buf);
 			}
 		}
 		else
 		{
-			part(kLabel, v.state == VrrState::Active ? "on    " : v.state == VrrState::Idle ? "idle  " : "?     ");
-			const ImU32 col = v.score >= 85 ? kValue : kWarn;
-			char buf[16];
-			std::snprintf(buf, sizeof(buf), "%3d", v.score);
-			part(col, buf);
-			part(kLabel, "/100  ");
-			part(col, v.state == VrrState::Idle ? "at refresh cap" : pml::metrics::vrrVerdictLabel(v.score));
-			if (v.cause != pml::metrics::VrrCause::None && v.state != VrrState::Idle)
+			const int severity = pml::metrics::vrrStabilitySeverity(v.stability);
+			const ImU32 col = severity >= 2 ? kBad : severity == 1 ? kWarn : kGood;
+			char hz[16], swing[24];
+			std::snprintf(hz, sizeof(hz), "%4.0f", v.hz);
+			std::snprintf(swing, sizeof(swing), "\xC2\xB1%-4.0f", std::min(v.swingHz, 9999.0));   // "±3   "
+			part(kValue, hz);
+			part(kUnit, " Hz  ");
+			part(kValue, swing);
+			part(col, pml::metrics::vrrStabilityLabel(v.stability));
+			if (v.cause != pml::metrics::VrrCause::None)
 			{
 				label("      ", true);
 				part(kLabel, pml::metrics::vrrCauseLabel(v.cause));
-			}
-		}
-	}
-
-	if (p.panels & pml::kPanelExperience)
-	{
-		// "Exp    84/100  minor issues  pace 96", and the main cause below it when under 85. Pace = consistency
-		// alone (judder, stutters), the same at any frame rate.
-		const pml::metrics::ExperienceVerdict &e = s.experience;
-		label("Exp   ", true);
-		if (!have || !s.hasDisplayInfo || e.score < 0)
-		{
-			value(na, "", "");
-			if (have && !s.hasDisplayInfo)
-				part(kLabel, "  needs display times");
-		}
-		else
-		{
-			const ImU32 col = e.score >= 85 ? kValue : kWarn;
-			char buf[16];
-			std::snprintf(buf, sizeof(buf), "%3d", e.score);
-			part(kLabel, "      ");
-			part(col, buf);
-			part(kLabel, "/100  ");
-			part(col, pml::metrics::experienceVerdictLabel(e.score));
-			char pace[16];
-			std::snprintf(pace, sizeof(pace), "%d", e.pacingScore);
-			part(kLabel, "  pace ");
-			part(e.pacingScore >= 85 ? kValue : kWarn, pace);
-			if (e.cause != pml::metrics::ExperienceCause::None)
-			{
-				label("      ", true);
-				part(kLabel, pml::metrics::experienceCauseLabel(e.cause));
 			}
 		}
 	}

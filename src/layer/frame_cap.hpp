@@ -4,8 +4,9 @@
 //     writes the segment's CapControl (CLI "presentmon cap", the GUI); then the segment's, polled with one atomic
 //     load per present (a seqlock snapshot when it changed), kept as one packed atomic so a decision never mixes
 //     two settings;
-//   * the auto cap's view of the outputs: DRM (pml::readDrmOutputs) read on a background thread every 500 ms while
-//     Auto is selected (a few ioctls, kept off the present path; the thread idles without DRM calls otherwise);
+//   * the outputs' VRR state: DRM (pml::readDrmOutputs) read on a background thread every 500 ms while Auto is
+//     selected or the overlay's VRR readout asked for it in the last 2 s (a few ioctls, kept off the present path;
+//     the thread idles without DRM calls otherwise);
 //   * the status written back to the segment: at most every 250 ms, and on the first present after a settings
 //     change with that change's generation (appliedGeneration), which `presentmon cap` waits for.
 // Thread-safe: presents of several swapchains may run on several threads. The process's runtime survives fork():
@@ -77,6 +78,11 @@ public:
 	// Forgets the outputs (Auto deselected: the next Auto starts from a fresh read, never from a stale VRR state).
 	void forgetOutputs();
 
+	// The VRR state of the output a `width` x `height` swapchain most likely uses, for the overlay's VRR readout
+	// (pml::pickVrrOutput, as Auto): also keeps the output thread reading DRM for the next 2 s. vrr 0 (unknown) until
+	// the first read and when DRM is unreadable. A short lock; call it a few times per second, not per present.
+	AutoCapInfo vrrInfo(uint32_t width, uint32_t height, uint64_t nowNs);
+
 private:
 	void ensureThread();
 	AutoCapInfo autoInfoFor(uint32_t width, uint32_t height);
@@ -98,6 +104,7 @@ private:
 	std::mutex outputsMutex_;
 	std::vector<pml::DrmOutput> outputs_;
 	bool outputsRead_ = false;
+	std::atomic<uint64_t> outputsWantedUntilNs_{0};   // vrrInfo() keeps the output thread reading until then
 
 	std::atomic<uint64_t> lastReportNs_{0};
 	std::atomic<uint32_t> reportedGeneration_{0};

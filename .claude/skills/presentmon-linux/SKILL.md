@@ -1,12 +1,12 @@
 ---
 name: presentmon-linux
-description: Work on presentmon-linux (Vulkan layer, presentmon CLI, overlay, Qt GUI, frame cap, VRR and experience scores). Build it, run the unit and live tests, record measurement scenarios with the vk_truth / d3d11_truth / d3d12_truth test apps, debug empty or wrong columns in a game, and avoid the known pitfalls of present timing, DXVK, vkd3d-proton and KWin. Use it for any change, bug or measurement in this repository, even if the request only names a symptom ("display latency shows NA", "the cap adds latency", "VRR score is low").
+description: Work on presentmon-linux (Vulkan layer, presentmon CLI, overlay, Qt GUI, frame cap, VRR readout). Build it, run the unit and live tests, record measurement scenarios with the vk_truth / d3d11_truth / d3d12_truth test apps, debug empty or wrong columns in a game, and avoid the known pitfalls of present timing, DXVK, vkd3d-proton and KWin. Use it for any change, bug or measurement in this repository, even if the request only names a symptom ("display latency shows NA", "the cap adds latency", "VRR says unstable").
 ---
 
 # presentmon-linux
 
 What the project is: README.md. Design: docs/ARCHITECTURE.md. Hard-won facts: docs/FINDINGS.md. **Read FINDINGS.md
-before changing timing, IDs, GPU timing, the frame cap or a score.** Most of its items look like bugs in this code
+before changing timing, IDs, GPU timing, the frame cap or the VRR readout.** Most of its items look like bugs in this code
 until you know them.
 
 ## Map
@@ -15,7 +15,7 @@ until you know them.
 |---|---|
 | `src/layer/` | Implicit Vulkan layer: `layer.cpp` (hooks, present path, frame cap plan/holds, NV_low_latency2), `timing_broker.*` (shares VK_EXT_present_timing and present IDs with the app), `gpu_timer.*` (GPU timestamps), `frame_limiter.*` / `frame_cap.*` (cap), `process_segment.*` (shm ring) |
 | `src/layer/overlay/` | Dear ImGui overlay: `stats.*` (rolling windows), `ui.cpp` (panels) |
-| `src/metrics/` | Intel's metrics code adapter (`engine`, `adapter`), `summary` (avg/percentiles/lows/GQI), `vrr`, `experience` |
+| `src/metrics/` | Intel's metrics code adapter (`engine`, `adapter`), `summary` (avg/percentiles/lows/GQI), `vrr` (VRR readout) |
 | `src/common/` | `protocol.hpp` (shm layout, FrameRecord, Overlay/CapControl), `shm.*`, `drm_outputs.*` |
 | `src/collector/` | `presentmon` CLI: capture (CSV), `list`, `overlay`, `cap` |
 | `src/gui/` | Qt 6 / Kirigami app: `backend/` (ProcessModel, LiveSession, CaptureAnalysis, csvreader), `qml/` |
@@ -99,8 +99,8 @@ move the old `.so` aside first instead of overwriting it** (`mv lib.so lib.so.ol
 | CPU columns odd under DXVK | They describe DXVK's presenter thread | Expected (FINDINGS 4) |
 | A cap adds a frame of latency under DXVK/vkd3d | Wait sits on the submit thread | Frame-thread holds; DXVK + V-Sync on can't be reached (FINDINGS 5-6) |
 | Cap "holds" but the game runs fast | Hold engaged on a non-pacing thread, or a backstop wait became the pacer | Steady-pattern detection, average-interval check (FINDINGS 6) |
-| VRR score drops mid-run | KWin switched VRR off (focus moved), or another screen renders animations | `VRR_ENABLED` timeline; FINDINGS 7 |
-| A metric looks great on a broken run | It ignores screen times (GQI) or one kind of stutter | Experience score uses screen intervals and animation error (FINDINGS 8) |
+| VRR readout jittery/unstable or off mid-run | KWin switched VRR off (focus moved), or another screen renders animations | `VRR_ENABLED` timeline; FINDINGS 7 |
+| A metric looks great on a broken run | It ignores screen times (GQI) or one kind of stutter | Check screen intervals and MsAnimationError (FINDINGS 8) |
 | Proton test window on the wrong screen | Class `steam_proton` not covered by a window rule | Add a rule for it during the run |
 | GitHub reports the license as NOASSERTION | Extra text in LICENSE | Keep LICENSE the plain MIT text |
 

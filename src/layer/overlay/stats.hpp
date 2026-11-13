@@ -9,7 +9,6 @@
 #pragma once
 
 #include <pml/metrics/engine.hpp>
-#include <pml/metrics/experience.hpp>
 #include <pml/metrics/vrr.hpp>
 #include <pml/protocol.hpp>
 
@@ -57,8 +56,9 @@ struct Snapshot
 	double droppedPct = kNA;        // not displayed / frames with display info, long window
 	uint32_t droppedCount = 0;
 	uint32_t displayKnownCount = 0;
-	pml::metrics::VrrVerdict vrr;   // displayed frames of the long window (state NoData without display info)
-	pml::metrics::ExperienceVerdict experience;   // the same frames (score -1 without display info)
+	// VRR readout (pml/metrics/vrr.hpp, kVrrLive): state from the displayed frames of the long window, refresh rate
+	// over the last 250 ms, swing and verdict over the last 2 s (state NoData without display info).
+	pml::metrics::VrrReadout vrr;
 	uint64_t rowsTotal = 0;         // rows produced by the engine so far
 	float graphPresent[kGraphPoints] = {};  // MsBetweenPresents, max per bucket, oldest first, 0 = no data
 	float graphDisplay[kGraphPoints] = {};  // MsBetweenDisplayChange
@@ -91,7 +91,6 @@ struct DisplaySample
 	float displayLatencyMs = 0;
 	float readyToScreenMs = -1;  // < 0: not available
 	float betweenPresentsMs = 0; // the game's frame interval of the same frame (for the VRR verdict)
-	float animationErrorMs = std::numeric_limits<float>::quiet_NaN();  // MsAnimationError; NaN = not available
 };
 
 class OverlayStats
@@ -103,7 +102,7 @@ public:
 	void push(const pml::FrameRecord &record);
 	void setCollecting(bool on);
 	bool collecting() const;
-	// What the VRR verdict knows about the output (refresh, VRR floor, the driver's VRR state). Default: the
+	// What the VRR readout knows about the output (refresh, VRR floor, the driver's VRR state). Default: the
 	// swapchain's refresh duration when the driver reported one, nothing else. Presenting thread.
 	void setVrrContext(const pml::metrics::VrrContext &context) { vrrContext_ = context; }
 	const pml::metrics::VrrContext &vrrContext() const { return vrrContext_; }
@@ -153,7 +152,6 @@ private:
 	std::deque<DisplaySample> displayed_;
 	pml::metrics::VrrContext vrrContext_;
 	std::vector<pml::metrics::VrrFrame> vrrScratch_;
-	std::vector<pml::metrics::ExperienceFrame> experienceScratch_;
 	struct Bucket
 	{
 		int64_t id = -1;

@@ -42,10 +42,9 @@ struct Numbers
 	double gpuBusyMs = kNaN, gpuWaitMs = kNaN, gpuLatencyMs = kNaN;
 	double readyToScreenMs = kNaN, droppedPct = kNaN;
 	qulonglong lost = 0;
-	int vrrScore = -1;
+	double vrrHz = kNaN, vrrSwingHz = kNaN, vrrLowHz = kNaN, vrrHighHz = kNaN, vrrMinHz = kNaN, vrrMaxHz = kNaN;
+	int vrrSeverity = -1;
 	QString vrrState, vrrVerdict, vrrCause, vrrDetail, vrrSource;
-	int experienceScore = -1, pacingScore = -1;
-	QString experienceVerdict, experienceCause, experienceDetail;
 
 	bool operator==(const Numbers &o) const
 	{
@@ -55,15 +54,15 @@ struct Numbers
 		       same(cpuBusyMs, o.cpuBusyMs) && same(cpuWaitMs, o.cpuWaitMs) && same(gpuBusyMs, o.gpuBusyMs) &&
 		       same(gpuWaitMs, o.gpuWaitMs) && same(gpuLatencyMs, o.gpuLatencyMs) &&
 		       same(displayLatencyMs, o.displayLatencyMs) && same(untilDisplayedMs, o.untilDisplayedMs) &&
-		       same(readyToScreenMs, o.readyToScreenMs) && same(droppedPct, o.droppedPct) && vrrScore == o.vrrScore &&
+		       same(readyToScreenMs, o.readyToScreenMs) && same(droppedPct, o.droppedPct) && same(vrrHz, o.vrrHz) &&
+		       same(vrrSwingHz, o.vrrSwingHz) && same(vrrLowHz, o.vrrLowHz) && same(vrrHighHz, o.vrrHighHz) &&
+		       same(vrrMinHz, o.vrrMinHz) && same(vrrMaxHz, o.vrrMaxHz) && vrrSeverity == o.vrrSeverity &&
 		       vrrState == o.vrrState && vrrVerdict == o.vrrVerdict && vrrCause == o.vrrCause &&
-		       vrrDetail == o.vrrDetail && vrrSource == o.vrrSource && experienceScore == o.experienceScore && pacingScore == o.pacingScore &&
-		       experienceVerdict == o.experienceVerdict && experienceCause == o.experienceCause &&
-		       experienceDetail == o.experienceDetail;
+		       vrrDetail == o.vrrDetail && vrrSource == o.vrrSource;
 	}
 };
 
-Numbers fromSnapshot(const Snapshot &s)
+Numbers fromSnapshot(const Snapshot &s, const pml::metrics::VrrContext &context)
 {
 	Numbers n;
 	n.valid = s.valid;
@@ -85,28 +84,18 @@ Numbers fromSnapshot(const Snapshot &s)
 	n.untilDisplayedMs = s.untilDisplayedMs;
 	n.readyToScreenMs = s.readyToScreenMs;
 	n.droppedPct = s.droppedPct;
-	const pml::metrics::ExperienceVerdict &e = s.experience;
-	n.experienceScore = e.score;
-	n.pacingScore = e.pacingScore;
-	n.experienceVerdict = QString::fromLatin1(pml::metrics::experienceVerdictLabel(e.score));
-	n.experienceCause = QString::fromLatin1(pml::metrics::experienceCauseLabel(e.cause));
-	n.experienceDetail = QString::fromStdString(pml::metrics::experienceDetail(e));
-	const pml::metrics::VrrVerdict &v = s.vrr;
-	n.vrrScore = v.score;
+	const pml::metrics::VrrReadout &v = s.vrr;
+	n.vrrHz = v.hz;
+	n.vrrSwingHz = v.swingHz;
+	n.vrrLowHz = v.lowHz;
+	n.vrrHighHz = v.highHz;
+	n.vrrMinHz = context.vrrMinHz > 0 ? context.vrrMinHz : kNaN;
+	n.vrrMaxHz = v.refreshHz;
+	n.vrrSeverity = pml::metrics::vrrStabilitySeverity(v.stability);
 	n.vrrState = QString::fromLatin1(pml::metrics::vrrStateLabel(v.state));
-	n.vrrVerdict = QString::fromLatin1(pml::metrics::vrrVerdictLabel(v.score));
+	n.vrrVerdict = QString::fromLatin1(pml::metrics::vrrStabilityLabel(v.stability));
 	n.vrrCause = QString::fromLatin1(pml::metrics::vrrCauseLabel(v.cause));
-	if (v.state != pml::metrics::VrrState::NoData)
-	{
-		QString detail = QStringLiteral("Uneven frames %1 % (%2 % on screen only) · stutters %3 %")
-		                     .arg(v.unevenPct, 0, 'f', 1)
-		                     .arg(v.unevenDisplayPct, 0, 'f', 1)
-		                     .arg(v.stutterPct, 0, 'f', 1);
-		if (!std::isnan(v.lfcCrossings))
-			detail += QStringLiteral(" · LFC crossings %1").arg(int(v.lfcCrossings));
-		detail += QStringLiteral(" · %1 frames").arg(qulonglong(v.frames));
-		n.vrrDetail = detail;
-	}
+	n.vrrDetail = pml::gui::vrrDetailText(v);
 	return n;
 }
 
@@ -460,17 +449,18 @@ void LiveSession::setOutputSourceForTest(std::function<std::vector<pml::gui::Out
 {
 	d_->outputSource = std::move(source);
 }
-int LiveSession::vrrScore() const { return d_->numbers.vrrScore; }
+double LiveSession::vrrHz() const { return d_->numbers.vrrHz; }
+double LiveSession::vrrSwingHz() const { return d_->numbers.vrrSwingHz; }
+double LiveSession::vrrLowHz() const { return d_->numbers.vrrLowHz; }
+double LiveSession::vrrHighHz() const { return d_->numbers.vrrHighHz; }
+double LiveSession::vrrMinHz() const { return d_->numbers.vrrMinHz; }
+double LiveSession::vrrMaxHz() const { return d_->numbers.vrrMaxHz; }
+int LiveSession::vrrSeverity() const { return d_->numbers.vrrSeverity; }
 QString LiveSession::vrrState() const { return d_->numbers.vrrState; }
 QString LiveSession::vrrVerdict() const { return d_->numbers.vrrVerdict; }
 QString LiveSession::vrrCause() const { return d_->numbers.vrrCause; }
 QString LiveSession::vrrDetail() const { return d_->numbers.vrrDetail; }
 QString LiveSession::vrrSource() const { return d_->numbers.vrrSource; }
-int LiveSession::experienceScore() const { return d_->numbers.experienceScore; }
-int LiveSession::pacingScore() const { return d_->numbers.pacingScore; }
-QString LiveSession::experienceVerdict() const { return d_->numbers.experienceVerdict; }
-QString LiveSession::experienceCause() const { return d_->numbers.experienceCause; }
-QString LiveSession::experienceDetail() const { return d_->numbers.experienceDetail; }
 
 void LiveSession::tick() { step(pml::monotonicNs()); }
 
@@ -563,7 +553,7 @@ void LiveSession::step(uint64_t nowNs)
 		swapchainDirty = oldSwapchain != d.swapchain || oldCount != d.swapchainCount || !same(oldHz, d.refreshHz);
 		checkStale = true;
 
-		// The outputs' VRR state, for the verdict (twice a second: a handful of DRM ioctls).
+		// The outputs' VRR state, for the VRR readout (twice a second: a handful of DRM ioctls).
 		const std::vector<pml::gui::OutputVrr> outputs = d.outputSource ? d.outputSource() : pml::gui::readDrmOutputs();
 		std::string which;
 		d.vrrContext = pml::gui::vrrContextFromOutputs(outputs, &which);
@@ -665,7 +655,10 @@ void LiveSession::step(uint64_t nowNs)
 
 	Numbers n;
 	if (d.followed != 0)
-		n = fromSnapshot(d.chains.at(d.followed).stats->snapshot());
+	{
+		const OverlayStats &stats = *d.chains.at(d.followed).stats;
+		n = fromSnapshot(stats.snapshot(), stats.vrrContext());
+	}
 	n.vrrSource = d.vrrSource;
 	n.lost = d.reader->lostRecords() - d.lostBase;
 	if (d.dead)
