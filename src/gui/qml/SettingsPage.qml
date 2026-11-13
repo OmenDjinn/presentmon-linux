@@ -2,6 +2,7 @@
 // Settings: recording defaults, global shortcuts, the Vulkan layer's state and how to enable it.
 import QtQuick
 import QtQuick.Controls as QQC2
+import QtQuick.Dialogs
 import org.kde.kirigami as Kirigami
 import org.kde.kirigamiaddons.formcard as FormCard
 import PresentMon
@@ -18,21 +19,30 @@ FormCard.FormCardPage {
 
     Component.onCompleted: LayerStatus.refresh()
 
+    FolderDialog {
+        id: folderDialog
+        title: "Capture folder"
+        // Encoded per segment: "#", "?" or "%" in a folder name would break a plain "file://" string.
+        currentFolder: "file://" + Recorder.folder.split("/").map(encodeURIComponent).join("/")
+        onAccepted: {
+            const path = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
+            if (path !== "") {
+                page.settings.captureFolder = path
+                Recorder.folder = path
+            }
+        }
+    }
+
     FormCard.FormHeader { title: "Recording" }
     FormCard.FormCard {
-        FormCard.FormFolderDelegate {
+        // A button and Qt's folder dialog, not FormCard.FormFolderDelegate: Kirigami Addons before 1.8
+        // (Debian 13, which the AppImage is built on) does not have it.
+        FormCard.FormButtonDelegate {
             id: folderPicker
-            label: "Capture folder"
+            text: "Capture folder"
             description: Recorder.folder
-            // Encoded per segment: "#", "?" or "%" in a folder name would break a plain "file://" string.
-            currentFolder: "file://" + Recorder.folder.split("/").map(encodeURIComponent).join("/")
-            onAccepted: {
-                const path = decodeURIComponent(selectedFolder.toString().replace(/^file:\/\//, ""))
-                if (path !== "") {
-                    page.settings.captureFolder = path
-                    Recorder.folder = path
-                }
-            }
+            icon.name: "folder-open"
+            onClicked: folderDialog.open()
         }
         FormCard.FormDelegateSeparator {}
         FormCard.FormComboBoxDelegate {
