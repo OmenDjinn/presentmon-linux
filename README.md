@@ -22,6 +22,25 @@ Credits: built on [Intel PresentMon](https://github.com/GameTechDev/PresentMon) 
 measurement approach the layer's timing is based on), and [Dear ImGui](https://github.com/ocornut/imgui) by Omar Cornut (overlay). MIT licensed:
 `LICENSE`; third-party licenses: `THIRD_PARTY_NOTICES.md`. Not affiliated with Intel.
 
+## AppImage
+
+Each [release](https://github.com/OmenDjinn/presentmon-linux/releases) has `PresentMon-<version>-x86_64.AppImage`:
+the GUI, the `presentmon` CLI and the Vulkan layer in one file. It is built on Debian 13 and needs glibc 2.41 or
+newer (Debian 13, Ubuntu 25.04, Fedora 42, current Arch and later; not Ubuntu 24.04).
+
+```bash
+chmod +x PresentMon-*.AppImage
+./PresentMon-*.AppImage --install-layer     # once: copies the layer and its manifest into ~/.local
+./PresentMon-*.AppImage                     # the GUI
+./PresentMon-*.AppImage presentmon list     # the CLI (any presentmon arguments)
+./PresentMon-*.AppImage --remove-layer
+```
+
+Games cannot load the layer from inside the AppImage (it is only mounted while it runs), which is why
+`--install-layer` copies it to `~/.local/lib` with a manifest in `~/.local/share/vulkan/implicit_layer.d`. Run it
+again after updating the AppImage. Then start a game with `PRESENTMON_LAYER=1` (see Run). The recipe is
+`packaging/appimage/build.sh`; `.github/workflows/appimage.yml` builds it for every `v*` tag.
+
 ## Build
 
     git submodule update --init
