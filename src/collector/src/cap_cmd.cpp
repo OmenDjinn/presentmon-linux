@@ -96,7 +96,7 @@ std::string describeCap(const pml::CapControl &c, bool pending)
 	{
 		out += "; in force: nothing";
 		if (c.mode == uint32_t(pml::CapMode::Auto))
-			out += c.vrr == 2 ? " (VRR is off on every output)" : c.vrr == 0 ? " (VRR state unknown)" : "";
+			out += c.vrr == 2 ? " (VRR is off on the game's screen)" : c.vrr == 0 ? " (VRR state unknown)" : "";
 	}
 	if (c.mode == uint32_t(pml::CapMode::Auto) && c.refreshMilli)
 	{

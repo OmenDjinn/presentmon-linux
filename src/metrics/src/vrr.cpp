@@ -62,8 +62,15 @@ constexpr double kUnevenShare = 0.25;       // ... nor one under 25 % of the med
 constexpr double kStutterFactor = 2.5;      // on screen this many medians: a stutter
 constexpr double kUnstablePct = 15.0;
 constexpr double kJitteryPct = 5.0;
-constexpr double kEventsPerSecond = 0.5;    // stutters or LFC crossings that make the verdict
+constexpr double kBelowRangePct = 15.0;     // this share of the frames re-scanned at the floor: "below range"
+constexpr double kInsideRange = 0.75;       // median interval up to this share of 1 / vrrMinHz: inside the range
+constexpr double kEventsPerSecond = 0.5;    // stutters or below-floor frames that make the verdict
 constexpr double kVaryingPct = 15.0;
+// A frame that may tear (IMMEDIATE) starts a new refresh when it comes at least this share of a scan-out after
+// the last refresh started; earlier it tears into the running scan. (Frames that had to wait for a re-scan to end
+// come 0.92-0.99 of a scan-out after its start: the active lines of the mode; measured 2026-11-13.)
+constexpr double kScanShare = 0.9;
+constexpr size_t kMaxRescanRates = 512;     // per frame, in the percentile list (a 10 s stall is 480 re-scans)
 
 } // namespace
 
@@ -129,6 +136,45 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 	else
 		out.state = VrrState::Unknown;
 
+	// --- The panel's refreshes behind the displayed frames (the top of vrr.hpp) ---
+	// A walk over the frames that keeps the time since the panel's last refresh started. The floor re-scans are
+	// counted only when the driver says VRR is on for this output and how its display engine behaves is known;
+	// the scan-out time needs the mode's rate (the output's, or the grid the screen times snap to).
+	const double floorMs = context.vrrMinHz > 0 ? 1000.0 / context.vrrMinHz : 0.0;
+	const double scanMs = periodMs;
+	const bool rescanModel = context.floor == VrrFloor::Rescan && context.driver == DriverVrr::On &&
+	                         context.refreshHz > 0 && floorMs > 1.1 * scanMs;
+	const double newScanMs = kScanShare * scanMs;   // 0 without a known rate: every frame starts a refresh
+	const auto capped = [&](double hz) { return refreshHz > 0 ? std::min(hz, refreshHz) : hz; };
+	struct Refreshes
+	{
+		uint32_t rescans = 0;   // refreshes without a new frame before this frame came
+		bool own = false;       // the frame started a refresh (false: it tore into the running one)
+		double ownMs = 0;       // ... this long after the previous refresh started
+	};
+	std::vector<Refreshes> panel(shown.size());
+	{
+		double since = 0;   // ms since the last refresh started
+		for (size_t i = 0; i < shown.size(); i++)
+		{
+			double t = since + double(shown[i].displayMs);
+			Refreshes &r = panel[i];
+			// A frame that cannot tear waited for a running re-scan to end, so it comes at least most of a
+			// scan-out after it: nearer than half of one, it came just before the re-scan was due (noise).
+			const double slackMs = shown[i].tears ? 0.0 : scanMs / 2;
+			if (rescanModel && t >= floorMs + slackMs)
+			{
+				const double k = std::floor((t - slackMs) / floorMs);
+				r.rescans = uint32_t(std::min(k, 1.0e6));
+				t -= k * floorMs;
+			}
+			r.own = t > 0 && (!shown[i].tears || t >= newScanMs);
+			r.ownMs = t;
+			since = r.own ? 0.0 : t;
+		}
+	}
+	const auto refreshesOf = [&](size_t i) { return size_t(panel[i].rescans) + (panel[i].own ? 1u : 0u); };
+
 	// --- The judged frames: the last recentMs of screen time, at least kMinFrames ---
 	size_t first = 0;
 	if (options.recentMs > 0)
@@ -141,13 +187,21 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 	const std::span<const VrrFrame> judged(shown.data() + first, shown.size() - first);
 	out.judgedFrames = judged.size();
 
+	// One rate per panel refresh: the re-scans at the floor rate, then the frame's own refresh. The re-scans of a
+	// long stall add up to one entry each (48 per second of stall): bounded by the 10 s the callers keep.
 	std::vector<double> rates;
 	rates.reserve(judged.size());
 	double judgedMs = 0;
-	for (const VrrFrame &f : judged)
+	size_t refreshes = 0, rescans = 0;
+	for (size_t i = first; i < shown.size(); i++)
 	{
-		judgedMs += f.displayMs;
-		rates.push_back(1000.0 / f.displayMs);
+		judgedMs += shown[i].displayMs;
+		const size_t listed = std::min<size_t>(panel[i].rescans, kMaxRescanRates);
+		rates.insert(rates.end(), listed, context.vrrMinHz);
+		if (panel[i].own)
+			rates.push_back(capped(1000.0 / panel[i].ownMs));
+		refreshes += refreshesOf(i);
+		rescans += panel[i].rescans;
 	}
 	out.judgedSeconds = judgedMs / 1000.0;
 	std::sort(rates.begin(), rates.end());
@@ -155,17 +209,21 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 	out.highHz = quantile(rates, 0.95);
 	out.medianHz = quantile(rates, 0.5);
 	out.swingHz = (out.highHz - out.lowHz) / 2.0;
+	out.meanHz = capped(1000.0 * double(refreshes) / judgedMs);
+	if (rescanModel)
+		out.rescans = double(rescans);
 
-	// Now: the frames of the last nowMs of screen time (at least one).
+	// Now: the refreshes of the frames of the last nowMs of screen time (at least one frame).
 	{
 		double span = 0;
-		size_t n = 0;
-		for (size_t i = shown.size(); i > 0 && (n == 0 || span < options.nowMs); i--)
+		size_t n = 0, used = 0;
+		for (size_t i = shown.size(); i > 0 && (used == 0 || span < options.nowMs); i--)
 		{
 			span += shown[i - 1].displayMs;
-			n++;
+			n += refreshesOf(i - 1);
+			used++;
 		}
-		out.hz = 1000.0 * double(n) / span;
+		out.hz = capped(1000.0 * double(n) / span);
 	}
 
 	// Drift: the rate of consecutive nowMs slices of the judged frames (an incomplete last slice is left out).
@@ -173,13 +231,13 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 		const double sliceMs = options.nowMs > 0 ? options.nowMs : 250.0;
 		double lo = 0, hi = 0, span = 0;
 		size_t n = 0, slices = 0;
-		for (const VrrFrame &f : judged)
+		for (size_t i = first; i < shown.size(); i++)
 		{
-			span += f.displayMs;
-			n++;
+			span += shown[i].displayMs;
+			n += refreshesOf(i);
 			if (span >= sliceMs)
 			{
-				const double r = 1000.0 * double(n) / span;
+				const double r = capped(1000.0 * double(n) / span);
 				lo = slices ? std::min(lo, r) : r;
 				hi = slices ? std::max(hi, r) : r;
 				slices++;
@@ -187,7 +245,7 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 				n = 0;
 			}
 		}
-		out.driftPct = slices >= 2 ? 100.0 * (hi - lo) / out.medianHz : 0.0;
+		out.driftPct = slices >= 2 && out.medianHz > 0 ? 100.0 * (hi - lo) / out.medianHz : 0.0;
 	}
 
 	// Events over consecutive judged frames.
@@ -197,14 +255,21 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 		jd.push_back(f.displayMs);
 	const double med = median(jd);
 	const double threshold = std::max(kUnevenFloorMs, kUnevenShare * med);
-	const double lfcMs = context.vrrMinHz > 0 ? 1000.0 / context.vrrMinHz : 0.0;
+	// Below the floor: the panel refreshed without this frame before it came (Rescan), else the frame just took
+	// longer than the floor allows.
+	const auto belowFloor = [&](size_t i) {
+		return rescanModel ? panel[first + i].rescans > 0 : floorMs > 0 && judged[i].displayMs > floorMs;
+	};
+	// A game that runs well inside the range: a frame the panel refreshed without is a hitch there (a stutter),
+	// not a frame rate under the floor (a 100 fps game with one 24 ms frame).
+	const bool insideRange = rescanModel && med <= kInsideRange * floorMs;
 	size_t pairs = 0, uneven = 0, unevenDisplay = 0, stutters = 0, crossings = 0, below = 0;
 	for (size_t i = 0; i < judged.size(); i++)
 	{
 		const double di = judged[i].displayMs;
-		if (lfcMs > 0 && di > lfcMs)
+		if (belowFloor(i))
 			below++;
-		if (di > kStutterFactor * med)
+		if (di > kStutterFactor * med || (insideRange && belowFloor(i)))
 			stutters++;
 		if (i == 0)
 			continue;
@@ -217,13 +282,13 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 			if (usable(pi) && usable(pp) && std::fabs(double(pi) - double(pp)) <= threshold / 2)
 				unevenDisplay++;
 		}
-		if (lfcMs > 0 && (di > lfcMs) != (dp > lfcMs))
+		if (belowFloor(i) != belowFloor(i - 1))
 			crossings++;
 	}
 	out.unevenPct = pairs ? 100.0 * double(uneven) / double(pairs) : 0.0;
 	out.unevenDisplayPct = pairs ? 100.0 * double(unevenDisplay) / double(pairs) : 0.0;
 	out.stutters = stutters;
-	if (lfcMs > 0)
+	if (floorMs > 0)
 	{
 		out.lfcCrossings = double(crossings);
 		out.belowRangePct = 100.0 * double(below) / double(judged.size());
@@ -235,22 +300,43 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 		if (!std::isnan(out.refreshHz))
 		{
 			out.hz = out.refreshHz;
-			out.lowHz = out.highHz = out.refreshHz;
+			out.lowHz = out.highHz = out.medianHz = out.meanHz = out.refreshHz;
 		}
 		out.swingHz = 0;
+		out.rescans = VrrReadout::kNA;
 		out.stability = VrrStability::Fixed;
 		return out;
 	}
 
-	// Stutters and LFC crossings count from kEventsPerSecond, at least one: one in the live 2 s (which ends a
+	// Frames stopped coming (live): the numbers above describe the past. A panel in VRR keeps refreshing at its
+	// floor; what a source other than Rescan does then is not known.
+	if (options.sinceLastMs > 0)
+	{
+		double recentMs = 0;   // the longest of the last three frame intervals
+		for (size_t i = shown.size(); i > 0 && shown.size() - i < 3; i--)
+			recentMs = std::max(recentMs, double(shown[i - 1].displayMs));
+		if (options.sinceLastMs > std::max(VrrReadout::kStaleMs, VrrReadout::kStaleIntervals * recentMs))
+		{
+			const double hz = rescanModel ? context.vrrMinHz : VrrReadout::kNA;
+			out.hz = out.lowHz = out.highHz = out.medianHz = out.meanHz = hz;
+			out.swingHz = rescanModel ? 0.0 : VrrReadout::kNA;
+			out.stability = VrrStability::NoFrames;
+			return out;
+		}
+	}
+
+	// Stutters and below-floor events count from kEventsPerSecond, at least one: one in the live 2 s (which ends a
 	// frame past 2 s), three in a 7 s capture.
 	const double events = std::max(1.0, std::floor(kEventsPerSecond * out.judgedSeconds));
-	if (out.unevenPct >= kUnstablePct)
+	const double belowEvents = insideRange ? 0.0 : rescanModel ? double(below) : double(crossings);
+	if (rescanModel && !insideRange && out.belowRangePct >= kBelowRangePct)
+		out.stability = VrrStability::BelowRange;
+	else if (out.unevenPct >= kUnstablePct)
 		out.stability = VrrStability::Unstable;
 	else if (double(stutters) >= events)
 		out.stability = VrrStability::Stutter;
-	else if (double(crossings) >= events)
-		out.stability = VrrStability::Lfc;
+	else if (floorMs > 0 && belowEvents >= events)
+		out.stability = VrrStability::BelowRange;
 	else if (out.unevenPct >= kJitteryPct)
 		out.stability = VrrStability::Jittery;
 	else if (out.state == VrrState::Idle)
@@ -262,6 +348,8 @@ VrrReadout analyzeVrr(std::span<const VrrFrame> frames, const VrrContext &contex
 
 	if (out.stability == VrrStability::Unstable || out.stability == VrrStability::Jittery)
 		out.cause = 2 * unevenDisplay > uneven ? VrrCause::Display : VrrCause::Game;
+	else if (out.stability == VrrStability::BelowRange)
+		out.cause = VrrCause::Floor;
 	return out;
 }
 
@@ -276,8 +364,9 @@ const char *vrrStabilityLabel(VrrStability stability)
 	case VrrStability::AtMax: return "at max";
 	case VrrStability::Jittery: return "jittery";
 	case VrrStability::Stutter: return "stutter";
-	case VrrStability::Lfc: return "LFC";
+	case VrrStability::BelowRange: return "below range";
 	case VrrStability::Unstable: return "unstable";
+	case VrrStability::NoFrames: return "no new frames";
 	}
 	return "";
 }
@@ -290,10 +379,11 @@ int vrrStabilitySeverity(VrrStability stability)
 	case VrrStability::Fixed:
 	case VrrStability::Stable:
 	case VrrStability::Varying:
-	case VrrStability::AtMax: return 0;
+	case VrrStability::AtMax:
+	case VrrStability::NoFrames: return 0;
 	case VrrStability::Jittery:
 	case VrrStability::Stutter:
-	case VrrStability::Lfc: return 1;
+	case VrrStability::BelowRange: return 1;
 	case VrrStability::Unstable: return 2;
 	}
 	return -1;
@@ -319,6 +409,7 @@ const char *vrrCauseLabel(VrrCause cause)
 	case VrrCause::None: return "";
 	case VrrCause::Display: return "uneven on screen, game steady";
 	case VrrCause::Game: return "game frame times swing";
+	case VrrCause::Floor: return "frame rate under the VRR floor";
 	}
 	return "";
 }

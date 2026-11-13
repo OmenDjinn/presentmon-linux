@@ -143,7 +143,7 @@ struct LiveSession::Impl
 
 	Numbers numbers;
 	std::function<std::vector<pml::gui::OutputVrr>()> outputSource;
-	pml::metrics::VrrContext vrrContext;
+	std::vector<pml::gui::OutputVrr> outputs;   // as last read (twice a second while attached)
 	QString vrrSource;
 	QString swapchain;
 	int swapchainCount = 0;
@@ -162,6 +162,7 @@ struct LiveSession::Impl
 		dead = false;
 		processName.clear();
 		numbers = Numbers{};
+		vrrSource.clear();
 		swapchain.clear();
 		swapchainCount = 0;
 		refreshHz = kNaN;
@@ -172,6 +173,7 @@ struct LiveSession::Impl
 
 	void follow(uint64_t serial);
 	Chain &chainFor(uint64_t serial);
+	QString vrrSourceText(const pml::SwapchainInfo &info) const;
 	void scanTable();
 	uint64_t countRecent(const Chain &c, uint64_t refNs) const;
 	void chooseFollowed(uint64_t nowNs);
@@ -215,6 +217,31 @@ void LiveSession::Impl::follow(uint64_t serial)
 	};
 }
 
+// What the driver says about the output this swapchain is on, as text for the VRR panel.
+QString LiveSession::Impl::vrrSourceText(const pml::SwapchainInfo &info) const
+{
+	const pml::gui::OutputVrr *used = nullptr;
+	const pml::metrics::VrrContext ctx =
+	    pml::gui::vrrContextFromOutputs(outputs, info.width, info.height, info.refreshDurationNs, &used);
+	const QString name = used ? QString::fromStdString(used->name) : QString();
+	if (ctx.driver == pml::metrics::DriverVrr::On)
+	{
+		const QString range =
+		    used && used->edidMinHz > 0
+		        ? QStringLiteral(", %1–%2 Hz")
+		              .arg(used->edidMinHz, 0, 'f', 0)
+		              .arg(std::min(used->refreshHz > 0 ? used->refreshHz : used->edidMaxHz, used->edidMaxHz), 0, 'f', 0)
+		        : QString();
+		return QStringLiteral("Driver: VRR on, %1%2").arg(name, range);
+	}
+	if (ctx.driver == pml::metrics::DriverVrr::Off)
+		return used ? QStringLiteral("Driver: VRR off on %1, fixed %2 Hz (KWin turns it on only for the active fullscreen window)")
+		                  .arg(name)
+		                  .arg(used->refreshHz, 0, 'f', 0)
+		            : QStringLiteral("Driver: VRR off on every screen (KWin turns it on only for the active fullscreen window)");
+	return QStringLiteral("Driver: VRR state not readable");
+}
+
 Chain &LiveSession::Impl::chainFor(uint64_t serial)
 {
 	auto it = chains.find(serial);
@@ -225,7 +252,8 @@ Chain &LiveSession::Impl::chainFor(uint64_t serial)
 	if (!c.known)
 		c.info.serial = serial;   // the record outran the table (or it is full): unknown rather than lost
 	c.stats = std::make_unique<OverlayStats>(c.info, uint32_t(pid), attachNs);
-	c.stats->setVrrContext(vrrContext);
+	c.stats->setVrrContext(
+	    pml::gui::vrrContextFromOutputs(outputs, c.info.width, c.info.height, c.info.refreshDurationNs));
 	return chains.emplace(serial, std::move(c)).first->second;
 }
 
@@ -265,6 +293,7 @@ void LiveSession::Impl::scanTable()
 	{
 		swapchain = newest ? pml::gui::swapchainSummary(*newest) : QString();
 		refreshHz = newest && newest->refreshDurationNs ? 1e9 / double(newest->refreshDurationNs) : kNaN;
+		vrrSource = newest ? vrrSourceText(*newest) : QString();
 	}
 }
 
@@ -553,27 +582,12 @@ void LiveSession::step(uint64_t nowNs)
 		swapchainDirty = oldSwapchain != d.swapchain || oldCount != d.swapchainCount || !same(oldHz, d.refreshHz);
 		checkStale = true;
 
-		// The outputs' VRR state, for the VRR readout (twice a second: a handful of DRM ioctls).
-		const std::vector<pml::gui::OutputVrr> outputs = d.outputSource ? d.outputSource() : pml::gui::readDrmOutputs();
-		std::string which;
-		d.vrrContext = pml::gui::vrrContextFromOutputs(outputs, &which);
-		const auto range = [](const pml::gui::OutputVrr *o) {
-			return o && o->edidMinHz > 0 ? QStringLiteral(", %1–%2 Hz").arg(o->edidMinHz, 0, 'f', 0).arg(
-			                                   std::min(o->refreshHz > 0 ? o->refreshHz : o->edidMaxHz, o->edidMaxHz), 0, 'f', 0)
-			                             : QString();
-		};
-		const pml::gui::OutputVrr *used = nullptr;
-		for (const auto &o : outputs)
-			if (o.name == which)
-				used = &o;
-		if (d.vrrContext.driver == pml::metrics::DriverVrr::On)
-			d.vrrSource = QStringLiteral("Driver: VRR on, %1%2").arg(QString::fromStdString(which), range(used));
-		else if (d.vrrContext.driver == pml::metrics::DriverVrr::Off)
-			d.vrrSource = QStringLiteral("Driver: VRR off on every screen (KWin turns it on only for the active fullscreen window)");
-		else
-			d.vrrSource = QStringLiteral("Driver: VRR state not readable");
+		// The outputs' VRR state, for the VRR readout (twice a second: a handful of DRM ioctls). Each swapchain
+		// gets the state of the output it is on (its refresh cycle, just read from the table, says which).
+		d.outputs = d.outputSource ? d.outputSource() : pml::gui::readDrmOutputs();
 		for (auto &[serial, c] : d.chains)
-			c.stats->setVrrContext(d.vrrContext);
+			c.stats->setVrrContext(
+			    pml::gui::vrrContextFromOutputs(d.outputs, c.info.width, c.info.height, c.info.refreshDurationNs));
 	}
 
 	const uint64_t before = d.followed;
@@ -656,8 +670,9 @@ void LiveSession::step(uint64_t nowNs)
 	Numbers n;
 	if (d.followed != 0)
 	{
-		const OverlayStats &stats = *d.chains.at(d.followed).stats;
-		n = fromSnapshot(stats.snapshot(), stats.vrrContext());
+		const Chain &c = d.chains.at(d.followed);
+		n = fromSnapshot(c.stats->snapshot(), c.stats->vrrContext());
+		d.vrrSource = d.vrrSourceText(c.info);
 	}
 	n.vrrSource = d.vrrSource;
 	n.lost = d.reader->lostRecords() - d.lostBase;

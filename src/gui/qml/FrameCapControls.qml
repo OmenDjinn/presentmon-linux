@@ -45,7 +45,7 @@ ColumnLayout {
             return "In force: " + rate + ", waiting " + where + ", " + Fmt.ms(controls.waitMs) + " ms per frame."
         }
         if (controls.mode === 2)
-            return controls.vrr === 2 ? "Auto: VRR is off on every screen, so nothing is capped."
+            return controls.vrr === 2 ? "Auto: VRR is off on the game's screen, so nothing is capped."
                                       : "Auto: waiting for the screens' VRR state."
         return "Waiting for the next frame."
     }

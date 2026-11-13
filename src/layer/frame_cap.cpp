@@ -186,19 +186,23 @@ void CapRuntime::forgetOutputs()
 	outputsRead_ = false;
 }
 
-AutoCapInfo CapRuntime::autoInfoFor(uint32_t width, uint32_t height)
+AutoCapInfo CapRuntime::autoInfoFor(uint32_t width, uint32_t height, uint64_t refreshDurationNs)
 {
 	AutoCapInfo info;
 	std::lock_guard<std::mutex> lock(outputsMutex_);
 	if (!outputsRead_)
 		return info;
-	if (const pml::DrmOutput *o = pml::pickVrrOutput(outputs_, width, height))
+	// The game's own output, with VRR on or off: an output of another screen with VRR on (KWin policy "Always")
+	// says nothing about this game.
+	if (const pml::DrmOutput *o = pml::pickOutput(outputs_, width, height, refreshDurationNs))
 	{
-		info.vrr = 1;
+		info.vrr = o->enabled == 1 ? 1 : o->enabled == 0 ? 2 : 0;
 		info.refreshHz = o->refreshHz;
 		info.vrrMinHz = o->edidMinHz;
+		info.floorRescan = pml::rescansAtVrrFloor(*o);
 		return info;
 	}
+	// Which output is unknown (several, no refresh cycle from the driver) and none has VRR on.
 	bool readable = false;
 	for (const pml::DrmOutput &o : outputs_)
 		readable = readable || o.enabled >= 0;
@@ -206,14 +210,14 @@ AutoCapInfo CapRuntime::autoInfoFor(uint32_t width, uint32_t height)
 	return info;
 }
 
-AutoCapInfo CapRuntime::vrrInfo(uint32_t width, uint32_t height, uint64_t nowNs)
+AutoCapInfo CapRuntime::vrrInfo(uint32_t width, uint32_t height, uint64_t refreshDurationNs, uint64_t nowNs)
 {
 	outputsWantedUntilNs_.store(nowNs + kWantedForNs, std::memory_order_relaxed);
 	ensureThread();
-	return autoInfoFor(width, height);
+	return autoInfoFor(width, height, refreshDurationNs);
 }
 
-CapDecision CapRuntime::decide(pml::Segment *segment, uint32_t width, uint32_t height)
+CapDecision CapRuntime::decide(pml::Segment *segment, uint32_t width, uint32_t height, uint64_t refreshDurationNs)
 {
 	if (segment)
 	{
@@ -249,7 +253,7 @@ CapDecision CapRuntime::decide(pml::Segment *segment, uint32_t width, uint32_t h
 	if (d.mode == uint32_t(pml::CapMode::Auto))
 	{
 		ensureThread();
-		d.autoInfo = autoInfoFor(width, height);
+		d.autoInfo = autoInfoFor(width, height, refreshDurationNs);
 	}
 	d.fps = effectiveCapFps(d.mode, fps, d.autoInfo);
 	if (d.fps > 0.0 && !everActive_.load(std::memory_order_relaxed))
@@ -277,7 +281,7 @@ void CapRuntime::report(pml::Segment *segment, const CapDecision &d, pml::CapMet
 	s.available = 1;
 	s.method = uint32_t(d.fps > 0.0 ? method : pml::CapMethod::None);
 	s.effectiveMilli = toMilli(d.fps);
-	s.refreshMilli = d.mode == uint32_t(pml::CapMode::Auto) ? toMilli(d.autoInfo.refreshHz) : 0;
+	s.refreshMilli = d.mode == uint32_t(pml::CapMode::Auto) && d.autoInfo.vrr == 1 ? toMilli(d.autoInfo.refreshHz) : 0;
 	s.vrr = d.mode == uint32_t(pml::CapMode::Auto) ? uint32_t(d.autoInfo.vrr) : 0;
 	if (stats && method != pml::CapMethod::Reflex && d.fps > 0.0)
 	{

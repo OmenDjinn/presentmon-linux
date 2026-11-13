@@ -5,8 +5,10 @@ anywhere, and several items cost days. `docs/ARCHITECTURE.md` has the design. Th
 measuring frames on Linux, or writing a layer, a limiter or a DXVK patch, should know first.
 
 The numbers come from one test system unless stated otherwise:
-- **GPU and desktop:** an NVIDIA GPU on driver 615, KDE Plasma 6 (KWin 6.8) on Wayland.
-- **Screens:** one 240 Hz VRR screen and one 120 Hz fixed-refresh screen.
+- **GPU and desktop:** an NVIDIA GPU on driver 615 (620.70 for the 2026-11-13 items), KDE Plasma 6 (KWin 6.8) on
+  Wayland.
+- **Screens:** one 240 Hz VRR screen (EDID range 48-500 Hz) and one 120 Hz fixed-refresh screen, later run at
+  165 Hz with VRR (48-180 Hz).
 - **Proton:** GE-Proton 11 (DXVK v3.1.1-134-g2cb40186c), plus a Proton 11 build with vkd3d-proton.
 
 Other drivers and compositors may behave differently. AMD/Mesa is untested; see the end of this file.
@@ -23,7 +25,14 @@ Other drivers and compositors may behave differently. AMD/Mesa is untested; see 
   - Only the `IMAGE_FIRST_PIXEL_OUT` stage (no `FIRST_PIXEL_VISIBLE`, no `REQUEST_DEQUEUED`).
   - Only the present-stage-local time domain, which the layer calibrates against CLOCK_MONOTONIC about once a
     second.
-  - `refreshDuration` reported as 0.
+  - `refreshDuration` (`vkGetSwapchainTimingPropertiesEXT`; this and the next item on driver 620.70) is 0 at
+    swapchain creation and valid a few presents later, once the surface is on a screen: the mode's refresh cycle of **that** screen (4166822 ns on the 240 Hz
+    one, 6060606 ns on the 165 Hz one), also with VRR on, and it follows the window to another screen. Ask again
+    later; it is the only thing that tells a layer which output a game is on. `refreshInterval` stays 0 (fixed or
+    variable is not told), and the properties do not change when VRR switches on or off.
+  - The `timingPropertiesCounter` that `vkGetPastPresentationTimingEXT` returns should say when to ask again. It
+    counts on FIFO swapchains and stays 0 on MAILBOX and IMMEDIATE ones although the properties changed. Poll the
+    properties instead (the layer does, every 250 ms).
   - No present-at-absolute or present-at-relative time (`abs=0 rel=0`).
   - Reports leave the driver's queue when returned complete. A full queue rejects new timed presents
     (`VK_ERROR_PRESENT_TIMING_QUEUE_FULL_EXT`).
@@ -163,12 +172,66 @@ Latency at 100 fps, from the game's frame start to the first pixel (medians of 2
   any other window, even on another screen, switches VRR off mid-game. A test window that cannot take focus
   never gets VRR. Read the CRTC's `VRR_ENABLED` property (libdrm, read-only) to know the real state rather than
   guessing from timing.
+- **VRR state is per output, and one output's says nothing about another's.** With policy "Always" on one screen
+  its `VRR_ENABLED` is 1 all the time. A game on the other screen, with VRR off there, then looks like a VRR game
+  to anything that asks "does an output have VRR on?": the readout showed `142 Hz ±71 unstable` while that monitor
+  showed a fixed 240 Hz, and the auto cap capped for the wrong screen. Find the game's output first (the
+  swapchain's refresh cycle, section 1), then read that output's state. Two screens in the same mode cannot be
+  told apart this way: there the one with VRR on is taken, which is right with KWin's default policy (VRR only for
+  the active fullscreen window) and wrong when the other one is on "Always".
+- **A monitor's refresh counter counts refresh cycles, not frames.** Inside the VRR range they are the same. They
+  differ when VRR is off on that screen (the panel runs at the mode's rate), when frames tear in (below), and below
+  the minimum, where the panel is refreshed without new frames. What the panel does is inferred here from our own
+  screen times and the driver's source; we did not read the monitors' counters ourselves.
+- **NVIDIA under Linux has no low-framerate compensation; the display engine re-scans at the floor.** Neither KWin
+  6.8.2 nor nvidia-drm / nvkms 620.70 multiplies frames (KWin: a FIXME in `renderloop.cpp`; nvkms: the head runs
+  one-shot with a hardware MIN_REFRESH timer of 1 / (EDID minimum), `nvkms-vrr.c`, `nvkms-evo3.c`). What happens
+  instead, measured from our own screen times:
+  - 20.83 ms (48 Hz floor) after the last refresh **started**, the previous frame is scanned out again, and again
+    every 20.83 ms while nothing comes.
+  - A FIFO or MAILBOX frame that arrives during such a scan waits for its end (0.92-0.99 of a scan-out after the
+    scan started: the mode's active lines). So no such frame reaches the screen between floor and about floor +
+    one scan-out after the previous one.
+  - A 45 fps MAILBOX cap (22.2 ms) therefore reaches the screen alternating 19.4 / 25.0 ms on the 240 Hz mode
+    (25.0 = 20.83 + 4.17) and 17.7 / 26.9 ms on the 165 Hz mode (20.83 + 6.06); a 40 fps cap mostly at 26.9 ms
+    with a 19.7 ms frame every fourth; 30 fps mostly at 33.3 ms (52-82 % of the frames within 1 ms of it). A
+    steady game is shown unevenly: judder that is not the game's.
+  - **IMMEDIATE frames tear in instead of waiting.** KWin flips them asynchronously under VRR (fullscreen): the
+    same 45 fps cap with IMMEDIATE reaches the screen every 22.2 ms, evenly, 1.4 ms into the re-scan; and at
+    400 fps all frames get screen times 2.5 ms apart on the 240 Hz mode. A torn-in frame starts no refresh, so
+    the panel then runs at the floor rate with an occasional short refresh (45 fps: four refreshes per three
+    frames), and above the maximum only the first frame after each scan-out starts a new one (400 fps: every
+    second frame, 200 refreshes a second, not 240).
+  - The panel's refresh intervals at 30 fps are 20.8 ms and 12.5 ms: 48 and 80 Hz, 60 refreshes a second. At
+    45 fps (MAILBOX): 19.4, 20.8 and 4.2 ms. A counter that measures refresh cycles then reads anything between
+    the floor and the maximum. The
+    same model gives the numbers users read off their monitors' counters on NVIDIA under Linux (user reports in
+    the NVIDIA developer forum threads 216567 and 379210, other monitors, not checked by us): 27 fps alternating
+    48 and 61 Hz on a 48-144 Hz panel (1 / (37.0 - 20.8 ms) = 62 Hz); 30 fps shown as 110-130 Hz on a 40-165 Hz
+    panel (1 / (33.3 - 25 ms) = 120 Hz) and as 175 Hz on a 32-175 Hz panel (the frame waiting for the re-scan);
+    on an 80-280 Hz panel 70 fps shown as 280 Hz and 80 fps jumping between 80, 112 and 280 Hz
+    (1 / (12.5 - 3.6 ms) = 112 Hz).
+  - Windows drivers and amdgpu (below-the-range frame multiplication, `freesync.c`) do real LFC and show clean
+    multiples instead. Not modelled here: untested.
+- **KWin adds refreshes of its own in a few cases.** Cursor-only commits flip the screen without a game frame; with
+  a game above 30 fps they are held up to 1 / (EDID minimum + 2) = 20 ms or merged into the game's commit, below
+  that they go out at once. Repaints of other windows are held 33 ms behind a fast active window (KWin 6.8.2
+  `renderloop.cpp`, `compositor.cpp`). A test window that is not the active one on a VRR screen had its frames
+  shown 26-38 ms apart at a 141 fps cap. At a 30 fps cap 8-23 % of the frames came one scan-out late (29 / 37 ms
+  pairs on the 240 Hz mode), probably such an extra refresh just before them. A game's own display times show
+  only the delay, never the extra refresh.
+- **DDC is no ground truth for the refresh rate.** VCP 0xAE (vertical frequency) on the 165 Hz screen read a
+  constant 165.20 Hz on the idle desktop and during a 100 fps VRR run (other rates not sampled), and the 240 Hz
+  screen does not implement it. Polling it (ddcutil, 8 reads a
+  second) made frames arrive 27-47 ms late on that screen. nvidia-drm gives no vblank counter either
+  (`vblank=0`), so the only checks are our own screen times and, by eye, the monitor's on-screen counter.
 - **Another output's activity can disturb VRR pacing.** On NVIDIA, an animated wallpaper rendering at 15 fps on the
   second screen made every ~10th frame on the VRR screen arrive late, at multiples of 66.7 ms. The game's own
   frame times were steady. Pausing the animation restored even pacing. It was not HDR, not the cables, and not the
   other screen's VRR setting. If VRR pacing is uneven while the game is steady, look at what else renders.
 - **There is no standard for "VRR stability".** Our readout counts screen-interval jumps larger than
-  max(2 ms, 25 % of the median): 5 % of the frame pairs is jittery, 15 % unstable. A 1.2 ms threshold counted the
+  max(2 ms, 25 % of the median): 5 % of the frame pairs is jittery, 15 % unstable; 15 % of the frames re-scanned
+  at the floor is "below range". A 1.2 ms threshold counted the
   games' normal noise. Show Hz, judge milliseconds: the same 2 ms step is 165 -> 124 Hz at 165 Hz and 60 -> 54 Hz at
   60 Hz, so a swing in Hz reads large at high refresh rates while nobody sees it. Fixed refresh can be told
   apart from VRR by screen intervals snapping to a refresh grid while the game's don't (try the lowest common rate

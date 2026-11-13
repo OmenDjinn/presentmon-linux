@@ -595,16 +595,18 @@ bool initImGui(OvSwapchain &s, VkQueue queue, uint32_t family)
 	return true;
 }
 
-// The VRR readout's context from what the outputs say: VRR on (with that output's refresh and EDID floor), off on
-// every readable output, or unknown (not read yet, DRM unreadable). Off leaves the refresh to the swapchain's.
-pml::metrics::VrrContext vrrContextFrom(const AutoCapInfo &info)
+// The VRR readout's context from what the game's output says (CapRuntime::vrrInfo): VRR on (with its EDID floor
+// and how the display engine behaves there), off, or unknown (not read yet, DRM unreadable), and its mode refresh.
+// Without the output, the refresh is the swapchain's own refresh cycle (`refreshDurationNs`, 0 = unknown).
+pml::metrics::VrrContext vrrContextFrom(const AutoCapInfo &info, uint64_t refreshDurationNs)
 {
 	pml::metrics::VrrContext c;
+	c.refreshHz = info.refreshHz > 0 ? info.refreshHz : refreshDurationNs ? 1e9 / double(refreshDurationNs) : 0.0;
 	if (info.vrr == 1)
 	{
 		c.driver = pml::metrics::DriverVrr::On;
-		c.refreshHz = info.refreshHz;
 		c.vrrMinHz = info.vrrMinHz;
+		c.floor = info.floorRescan ? pml::metrics::VrrFloor::Rescan : pml::metrics::VrrFloor::Unknown;
 	}
 	else if (info.vrr == 2)
 	{
@@ -1442,10 +1444,13 @@ static void onPresentImpl(PresentContext &ctx)
 		const uint32_t panels = s->control.panels ? s->control.panels : kDefaultPanels;
 		if ((panels & pml::kPanelVrr) && now - s->vrrContextNs >= 250'000'000)
 		{
-			// The driver's VRR state from DRM (CapRuntime's output thread, which reads it while asked), so the readout
-			// knows VRR is on instead of guessing from the timing, and knows the panel's floor (LFC).
+			// The VRR state of the game's own output from DRM (CapRuntime's output thread, which reads it while
+			// asked), so the readout knows VRR is on instead of guessing from the timing, and knows the panel's
+			// floor. The swapchain's refresh cycle (the layer keeps it current) says which output that is.
 			s->vrrContextNs = now;
-			s->stats->setVrrContext(vrrContextFrom(CapRuntime::get().vrrInfo(s->width, s->height, now)));
+			const uint64_t refreshNs = s->sc ? s->sc->info.refreshDurationNs : 0;
+			s->stats->setVrrContext(
+			    vrrContextFrom(CapRuntime::get().vrrInfo(s->width, s->height, refreshNs, now), refreshNs));
 		}
 		s->stats->update(now);
 

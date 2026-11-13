@@ -91,6 +91,7 @@ struct DisplaySample
 	float displayLatencyMs = 0;
 	float readyToScreenMs = -1;  // < 0: not available
 	float betweenPresentsMs = 0; // the game's frame interval of the same frame (for the VRR verdict)
+	bool tears = false;          // presented in a mode that may tear (IMMEDIATE): for the VRR readout
 };
 
 class OverlayStats

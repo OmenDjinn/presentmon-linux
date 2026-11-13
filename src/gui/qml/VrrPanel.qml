@@ -14,31 +14,38 @@ Rectangle {
     property bool live: true
     property real hz: NaN           // now (live) or the median (capture); the fixed rate when VRR is off
     property real swingHz: NaN
-    property real lowHz: NaN        // 5th / 95th percentile of the per-frame rates
+    property real lowHz: NaN        // 5th / 95th percentile of the per-refresh rates
     property real highHz: NaN
     property real minHz: NaN        // the panel's VRR floor (EDID), NaN = unknown
     property real maxHz: NaN        // the refresh rate (VRR maximum), NaN = unknown
     property int severity: -1       // 0 fine, 1 worth a look, 2 bad, -1 none
     property string state_: ""      // "no data", "unknown", "off", "idle", "active"
-    property string verdict: ""     // "stable", "varying", "at max", "jittery", "stutter", "LFC", "unstable", "fixed"
+    property string verdict: ""     // "stable", "varying", "at max", "jittery", "stutter", "below range", "unstable",
+                                    // "fixed", "no new frames"
     property string cause: ""
     property string detail: ""
     property string source: ""
 
     readonly property bool hasData: !isNaN(hz) && state_ !== "no data" && state_ !== ""
     readonly property bool fixed: state_ === "off"
+    // Frames stopped coming: a verdict, and a rate only when the driver's behaviour at the floor is known.
+    readonly property bool stalled: verdict === "no new frames"
     readonly property color verdictColor: severity >= 2 ? Kirigami.Theme.negativeTextColor
                                         : severity === 1 ? Kirigami.Theme.neutralTextColor
                                         : Kirigami.Theme.positiveTextColor
     readonly property string headline: {
+        if (stalled)
+            return "No new frames"
         if (!hasData)
             return "Not enough displayed frames yet"
         if (fixed)
             return "VRR is off"
-        const v = verdict === "LFC" ? "Crossing the VRR floor (LFC)" : verdict.charAt(0).toUpperCase() + verdict.slice(1)
+        const v = verdict === "below range" ? "Below the VRR range" : verdict.charAt(0).toUpperCase() + verdict.slice(1)
         return v + (cause !== "" ? " — " + cause : "") + (state_ === "unknown" ? " (VRR state unknown)" : "")
     }
     readonly property string explanation: {
+        if (stalled)
+            return "No new frame has reached the screen for a while (a loading screen, a paused or stalled game). With VRR on the screen keeps showing the last frame at its lowest VRR rate."
         if (!hasData)
             return "The readout needs display times (VK_EXT_present_timing) and at least 30 displayed frames."
         if (fixed)
@@ -47,8 +54,8 @@ Rectangle {
             return "The game runs at the screen's maximum refresh: VRR has nothing to vary. A frame cap a few fps lower keeps VRR in control."
         if (verdict === "stutter")
             return "Single frames stay on screen much longer than the rest (hitches): the refresh rate drops for that frame and jumps back."
-        if (verdict === "LFC")
-            return "The frame rate keeps crossing the screen's lowest VRR rate, where the driver starts repeating frames (LFC). Each crossing is a big refresh-rate jump, a common cause of VRR flicker."
+        if (verdict === "below range")
+            return "Frames come slower than the screen's lowest VRR rate. The screen cannot wait that long: it shows the previous frame again by itself, and a new frame that arrives meanwhile waits for that. So the screen refreshes more often than the game delivers frames (the rate above counts those refreshes, like the monitor's own counter), the rate jumps between the floor and far above it, and frames arrive unevenly. A common cause of VRR flicker."
         if (verdict === "jittery" || verdict === "unstable") {
             const how = verdict === "unstable" ? "The refresh rate jumps between frames often (15 % of frames or more): uneven motion, and flicker on OLED and VA panels, whose brightness depends on the refresh rate. "
                                                : "The refresh rate jumps between some frames (5-15 %). "

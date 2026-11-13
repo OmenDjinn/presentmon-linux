@@ -100,6 +100,8 @@ move the old `.so` aside first instead of overwriting it** (`mv lib.so lib.so.ol
 | A cap adds a frame of latency under DXVK/vkd3d | Wait sits on the submit thread | Frame-thread holds; DXVK + V-Sync on can't be reached (FINDINGS 5-6) |
 | Cap "holds" but the game runs fast | Hold engaged on a non-pacing thread, or a backstop wait became the pacer | Steady-pattern detection, average-interval check (FINDINGS 6) |
 | VRR readout jittery/unstable or off mid-run | KWin switched VRR off (focus moved), or another screen renders animations | `VRR_ENABLED` timeline; FINDINGS 7 |
+| VRR readout differs from the monitor's own counter | It must count panel refreshes on the game's own output: wrong output's VRR state (another screen on policy "Always"), frames under the VRR floor (the NVIDIA display engine re-scans), tearing above the maximum | `PRESENTMON_LOG=info`: "refresh cycle" line names the output's mode; `vrr.hpp` top comment; FINDINGS 1 and 7 |
+| Test window opens on the wrong screen although a rule forces one | The rule is applied late or not at all for a new window | Start it, then `kwin-test-rule add <class> <output> above` (moves the open window), then `check` |
 | A metric looks great on a broken run | It ignores screen times (GQI) or one kind of stutter | Check screen intervals and MsAnimationError (FINDINGS 8) |
 | Proton test window on the wrong screen | Class `steam_proton` not covered by a window rule | Add a rule for it during the run |
 | GitHub reports the license as NOASSERTION | Extra text in LICENSE | Keep LICENSE the plain MIT text |

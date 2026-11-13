@@ -60,6 +60,7 @@ struct Options
 	int sleepUs = 0;
 	int windows = 1;
 	bool noCleanup = false;
+	bool fullscreen = false;
 };
 
 } // namespace
@@ -86,6 +87,7 @@ int main(int argc, char **argv)
 		else if (a == "--sleep-us") o.sleepUs = std::atoi(v());
 		else if (a == "--windows") o.windows = std::atoi(v());
 		else if (a == "--no-cleanup") o.noCleanup = true;
+		else if (a == "--fullscreen") o.fullscreen = true;
 		else { std::fprintf(stderr, "unknown option %s\n", a.c_str()); return 2; }
 	}
 	if (o.x11)
@@ -112,11 +114,13 @@ int main(int argc, char **argv)
 		uint32_t imageIndex = 0;
 		int reports = 0, complete = 0, withFpo = 0, noFpoComplete = 0, partialSeen = 0;
 		uint64_t idCounter = 0;
+		uint64_t timingCounterSeen = 0;
 	};
 	std::vector<Chain> chains(size_t(std::max(1, o.windows)));
 	for (size_t i = 0; i < chains.size(); i++)
 	{
-		chains[i].window = SDL_CreateWindow("timing_probe", o.width, o.height, SDL_WINDOW_VULKAN);
+		chains[i].window = SDL_CreateWindow("timing_probe", o.width, o.height,
+		                                    SDL_WINDOW_VULKAN | (o.fullscreen ? SDL_WINDOW_FULLSCREEN : 0));
 		if (!chains[i].window)
 		{
 			std::fprintf(stderr, "window failed: %s\n", SDL_GetError());
@@ -360,6 +364,17 @@ int main(int argc, char **argv)
 		if (!o.quiet)
 			std::printf("POLL chain=%zu frame=%d rc=%d n=%u counters=%llu/%llu\n", ci, frame, int(r), pp.presentationTimingCount,
 			            (unsigned long long)pp.timingPropertiesCounter, (unsigned long long)pp.timeDomainsCounter);
+		if (pp.timingPropertiesCounter != c.timingCounterSeen)
+		{
+			// The driver's refresh cycle changed (the surface entered an output, VRR switched, a mode change): the
+			// properties are only valid once the surface is on a screen, so read them again.
+			c.timingCounterSeen = pp.timingPropertiesCounter;
+			VkSwapchainTimingPropertiesEXT tp = {VK_STRUCTURE_TYPE_SWAPCHAIN_TIMING_PROPERTIES_EXT};
+			uint64_t tc = 0;
+			const VkResult tr = vkGetSwapchainTimingPropertiesEXTFn(device, c.swapchain, &tp, &tc);
+			std::printf("TIMING chain=%zu frame=%d rc=%d refreshDuration=%llu refreshInterval=%llu counter=%llu\n", ci, frame, int(tr),
+			            (unsigned long long)tp.refreshDuration, (unsigned long long)tp.refreshInterval, (unsigned long long)tc);
+		}
 		for (uint32_t i = 0; i < pp.presentationTimingCount; i++)
 		{
 			const auto &rep = reports[i];

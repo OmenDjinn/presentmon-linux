@@ -824,25 +824,122 @@ TEST(DrmVrr, EdidRangeDescriptor)
 	EXPECT_FALSE(pml::gui::edidVerticalRange(none.data(), none.size(), &lo, &hi));
 }
 
-TEST(DrmVrr, TheOutputWithVrrOnIsTheGames)
+TEST(DrmVrr, WithoutTheRefreshCycleTheOutputWithVrrOnIsTheGames)
 {
 	using pml::gui::OutputVrr;
 	const OutputVrr dp1{"DP-1", true, 0, 120.0, 48, 180};
 	OutputVrr dp2{"DP-2", true, 1, 239.991, 48, 500};
-	std::string which;
-	auto ctx = pml::gui::vrrContextFromOutputs({dp1, dp2}, &which);
+	const OutputVrr *used = nullptr;
+	std::vector<OutputVrr> outputs{dp1, dp2};
+	auto ctx = pml::gui::vrrContextFromOutputs(outputs, 2560, 1440, 0, &used);
 	EXPECT_EQ(ctx.driver, pml::metrics::DriverVrr::On);
-	EXPECT_EQ(which, "DP-2");
+	ASSERT_EQ(used, &outputs[1]);
 	EXPECT_NEAR(ctx.refreshHz, 239.991, 1e-9);
 	EXPECT_EQ(ctx.vrrMinHz, 48.0);
+	EXPECT_EQ(ctx.floor, pml::metrics::VrrFloor::Unknown) << "no driver name";
 	dp2.enabled = 0;
-	ctx = pml::gui::vrrContextFromOutputs({dp1, dp2}, &which);
+	outputs = {dp1, dp2};
+	ctx = pml::gui::vrrContextFromOutputs(outputs, 2560, 1440, 0, &used);
 	EXPECT_EQ(ctx.driver, pml::metrics::DriverVrr::Off);
-	EXPECT_EQ(which, "");
+	EXPECT_EQ(used, nullptr);
+	EXPECT_EQ(ctx.refreshHz, 0.0) << "two screens with VRR off: which one is not known";
 	dp2.enabled = -1;
 	OutputVrr unreadable = dp1;
 	unreadable.enabled = -1;
-	EXPECT_EQ(pml::gui::vrrContextFromOutputs({unreadable, dp2}).driver, pml::metrics::DriverVrr::Unknown);
+	EXPECT_EQ(pml::gui::vrrContextFromOutputs({unreadable, dp2}, 2560, 1440, 0).driver, pml::metrics::DriverVrr::Unknown);
+	EXPECT_EQ(pml::gui::vrrContextFromOutputs({}, 2560, 1440, 4166822).driver, pml::metrics::DriverVrr::Unknown);
+	EXPECT_NEAR(pml::gui::vrrContextFromOutputs({}, 2560, 1440, 4166822).refreshHz, 239.99, 0.01)
+	    << "no output readable: the swapchain's own refresh cycle";
+}
+
+TEST(DrmVrr, TheSwapchainsRefreshCycleTellsItsOutput)
+{
+	// DP-1 on KWin's policy "Always" (VRR_ENABLED always 1), the game on DP-2 with VRR off: before, DP-1's state
+	// was taken for the game's, and the readout showed a moving rate while the monitor showed a fixed 240 Hz.
+	using pml::gui::OutputVrr;
+	OutputVrr dp1{"DP-1", true, 1, 165.000487, 48, 180, 2560, 1440, "nvidia-drm"};
+	OutputVrr dp2{"DP-2", true, 0, 239.991431, 48, 500, 2560, 1440, "nvidia-drm"};
+	const OutputVrr *used = nullptr;
+	std::vector<OutputVrr> outputs{dp1, dp2};
+	auto ctx = pml::gui::vrrContextFromOutputs(outputs, 2560, 1440, 4166822, &used);
+	EXPECT_EQ(ctx.driver, pml::metrics::DriverVrr::Off);
+	ASSERT_NE(used, nullptr);
+	EXPECT_EQ(used->name, "DP-2");
+	EXPECT_NEAR(ctx.refreshHz, 239.991, 1e-3);
+	// VRR on for the game (active fullscreen window), both screens on: still DP-2, with its floor and behaviour.
+	dp2.enabled = 1;
+	outputs = {dp1, dp2};
+	ctx = pml::gui::vrrContextFromOutputs(outputs, 2560, 1440, 4166822, &used);
+	EXPECT_EQ(ctx.driver, pml::metrics::DriverVrr::On);
+	ASSERT_NE(used, nullptr);
+	EXPECT_EQ(used->name, "DP-2");
+	EXPECT_EQ(ctx.vrrMinHz, 48.0);
+	EXPECT_EQ(ctx.floor, pml::metrics::VrrFloor::Rescan);
+	// The same game moved to DP-1.
+	ctx = pml::gui::vrrContextFromOutputs(outputs, 2560, 1440, 6060606, &used);
+	ASSERT_NE(used, nullptr);
+	EXPECT_EQ(used->name, "DP-1");
+	EXPECT_NEAR(ctx.refreshHz, 165.0, 1e-3);
+}
+
+TEST(LiveSession, VrrReadoutFollowsTheScreenTheGameIsOn)
+{
+	// DP-1 has VRR always on (KWin policy "Always"); the game runs on DP-2, whose VRR KWin turns on only while the
+	// game is the active fullscreen window. The swapchain's refresh cycle (4.167 ms) says it is on DP-2.
+	FakeProducer p;
+	ASSERT_TRUE(p.ok()) << p.error();
+	p.addSwapchain(makeSwapchainInfo(1, 2560, 1440, pml::monotonicNs(), 4166822, "VKD3D"));
+	LiveSession s;
+	s.setRunning(false);
+	auto dp2On = std::make_shared<bool>(false);
+	s.setOutputSourceForTest([dp2On] {
+		return std::vector<pml::gui::OutputVrr>{{"DP-1", true, 1, 165.000487, 48, 180, 2560, 1440, "nvidia-drm"},
+		                                        {"DP-2", true, *dp2On ? 1 : 0, 239.991431, 48, 500, 2560, 1440, "nvidia-drm"}};
+	});
+	s.setPid(p.pid());
+	ASSERT_TRUE(s.attached());
+	// 30 fps, every frame on screen 4 ms after its present.
+	std::vector<pml::FrameRecord> recs;
+	uint64_t t = s.attachNs();
+	uint64_t n = 0;
+	const auto publish = [&](int count) {
+		recs.clear();
+		for (int i = 0; i < count; ++i)
+		{
+			t += 33'333'333;
+			++n;
+			recs.push_back(makeRecord(1, n, t, t + 4 * kMs));
+		}
+		p.publish(recs);
+	};
+	publish(150);
+	s.tickForTest(t + 50 * kMs);
+	EXPECT_EQ(s.vrrState(), "off") << "DP-1's VRR says nothing about a game on DP-2";
+	EXPECT_EQ(s.vrrVerdict(), "fixed");
+	EXPECT_NEAR(s.vrrHz(), 239.99, 0.01) << "what DP-2's own counter shows";
+	EXPECT_EQ(s.vrrSwingHz(), 0.0);
+	EXPECT_TRUE(s.vrrSource().contains("VRR off on DP-2, fixed 240 Hz")) << s.vrrSource().toStdString();
+
+	// The game becomes the active fullscreen window: VRR on. 30 fps is under DP-2's 48 Hz floor, so the panel
+	// refreshes twice per frame.
+	*dp2On = true;
+	publish(150);
+	s.tickForTest(t + 50 * kMs);
+	EXPECT_EQ(s.vrrState(), "active");
+	EXPECT_EQ(s.vrrVerdict(), "below range");
+	EXPECT_EQ(s.vrrCause(), "frame rate under the VRR floor");
+	EXPECT_NEAR(s.vrrHz(), 60.0, 0.5);
+	EXPECT_NEAR(s.vrrLowHz(), 48.0, 0.1);
+	EXPECT_NEAR(s.vrrHighHz(), 80.0, 0.5);
+	EXPECT_EQ(s.vrrMinHz(), 48.0);
+	EXPECT_NEAR(s.vrrMaxHz(), 239.99, 0.01);
+	EXPECT_TRUE(s.vrrSource().contains("VRR on, DP-2, 48–240 Hz")) << s.vrrSource().toStdString();
+	EXPECT_TRUE(s.vrrDetail().contains("without a new frame")) << s.vrrDetail().toStdString();
+
+	// It stalls (a loading screen): the panel sits at its floor.
+	s.tickForTest(t + 3000 * kMs);
+	EXPECT_EQ(s.vrrVerdict(), "no new frames");
+	EXPECT_EQ(s.vrrHz(), 48.0);
 }
 
 TEST(LiveSession, VrrReadoutWithTheDriversState)
@@ -858,13 +955,14 @@ TEST(LiveSession, VrrReadoutWithTheDriversState)
 	});
 	s.setPid(p.pid());
 	ASSERT_TRUE(s.attached());
-	// Presents every 6 ms; every tenth frame reaches the screen 3 ms late (Lies of P, 2026-11-09).
+	// Presents every 6 ms; every tenth frame reaches the screen 2.2 ms late, so the screen waits 8.2 ms and then
+	// catches up after 3.8 ms (as Lies of P did, 2026-11-09).
 	std::vector<pml::FrameRecord> recs;
 	uint64_t t = s.attachNs();
 	for (uint64_t n = 1; n <= 900; ++n)
 	{
 		t += 6 * kMs;
-		recs.push_back(makeRecord(1, n, t, t + (n % 10 == 0 ? 7 : 4) * kMs));
+		recs.push_back(makeRecord(1, n, t, t + (n % 10 == 0 ? 6200 : 4000) * (kMs / 1000)));
 	}
 	p.publish(recs);
 	s.tickForTest(recs.back().presentStartNs + 20 * kMs);
@@ -872,9 +970,9 @@ TEST(LiveSession, VrrReadoutWithTheDriversState)
 	EXPECT_EQ(s.vrrVerdict(), "unstable");
 	EXPECT_EQ(s.vrrSeverity(), 2);
 	EXPECT_NEAR(s.vrrHz(), 166.7, 8.0) << "ten frames in 60 ms, give or take the slice edge";
-	EXPECT_NEAR(s.vrrLowHz(), 111.1, 1.0);
-	EXPECT_NEAR(s.vrrHighHz(), 333.3, 1.0);
-	EXPECT_NEAR(s.vrrSwingHz(), (333.3 - 111.1) / 2, 1.0);
+	EXPECT_NEAR(s.vrrLowHz(), 122.0, 1.0) << "8.2 ms";
+	EXPECT_NEAR(s.vrrHighHz(), 240.0, 1.0) << "3.8 ms after the late frame: no faster than the 240 Hz mode";
+	EXPECT_NEAR(s.vrrSwingHz(), (240.0 - 122.0) / 2, 1.0);
 	EXPECT_EQ(s.vrrMinHz(), 48.0);
 	EXPECT_EQ(s.vrrMaxHz(), 240.0);
 	EXPECT_EQ(s.vrrCause(), "uneven on screen, game steady");

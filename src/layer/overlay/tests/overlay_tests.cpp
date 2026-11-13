@@ -182,16 +182,50 @@ TEST(Stats, GpuNumbersArePresentMonsGpuMetrics)
 	EXPECT_NEAR(s.gpuLatencyMs, 8.333333 - 0.1 - 2.0, 1e-3);
 }
 
+TEST(Stats, VrrReadoutCountsPanelRefreshesAndNoticesAStall)
+{
+	// 30 fps with VRR on, on an NVIDIA output with a 48 Hz floor: the display engine re-scans every frame once,
+	// so the panel refreshes 60 times a second (what the monitor's own counter shows), not 30.
+	using pml::metrics::VrrStability;
+	OverlayStats stats(makeInfo(), 1, kT0);
+	const uint64_t period = 33'333'333;
+	for (uint64_t n = 1; n <= 300; n++)
+		stats.push(frame(n, period, 4'000'000));
+	pml::metrics::VrrContext ctx;
+	ctx.refreshHz = 239.991;
+	ctx.vrrMinHz = 48;
+	ctx.driver = pml::metrics::DriverVrr::On;
+	ctx.floor = pml::metrics::VrrFloor::Rescan;
+	stats.setVrrContext(ctx);
+	const uint64_t end = kT0 + 300 * period;
+	stats.update(end + 50'000'000);
+	EXPECT_NEAR(stats.snapshot().vrr.hz, 60.0, 0.5);
+	EXPECT_NEAR(stats.snapshot().vrr.lowHz, 48.0, 0.1);
+	EXPECT_NEAR(stats.snapshot().vrr.highHz, 80.0, 0.5);
+	EXPECT_EQ(stats.snapshot().vrr.stability, VrrStability::BelowRange);
+	EXPECT_NE(snapshotSummary(stats.snapshot(), true).find("vrr_hz=60.0"), std::string::npos)
+	    << snapshotSummary(stats.snapshot(), true);
+	EXPECT_NE(snapshotSummary(stats.snapshot(), true).find("vrr=below_range"), std::string::npos);
+
+	// The game stops presenting: after a moment the readout says so and shows the panel's floor, not 60 Hz forever.
+	stats.recompute(end + 300'000'000);
+	EXPECT_EQ(stats.snapshot().vrr.stability, VrrStability::BelowRange) << "0.3 s is still the usual lag at 30 fps";
+	stats.recompute(end + 2'500'000'000ull);
+	EXPECT_EQ(stats.snapshot().vrr.stability, VrrStability::NoFrames);
+	EXPECT_EQ(stats.snapshot().vrr.hz, 48.0);
+	EXPECT_NE(snapshotSummary(stats.snapshot(), true).find("vrr=no_new_frames"), std::string::npos);
+}
+
 TEST(Stats, VrrReadoutFromTheDisplayedFrames)
 {
-	// Steady presents every 6 ms. Shown evenly, or with every tenth frame 3 ms late (the screen waits, then
-	// catches up), as Lies of P under vkd3d-proton showed with VRR on; or late only in the first seconds.
+	// Steady presents every 6 ms. Shown evenly, or with every tenth frame 2.2 ms late (the screen waits 8.2 ms, then
+	// catches up after 3.8 ms), as Lies of P under vkd3d-proton showed with VRR on; or late only in the first seconds.
 	using pml::metrics::VrrStability;
 	auto run = [](uint64_t unevenUntil) {
 		OverlayStats stats(makeInfo(), 1, kT0);
 		const uint64_t period = 6'000'000;
 		for (uint64_t n = 1; n <= 1200; n++)
-			stats.push(frame(n, period, (n <= unevenUntil && n % 10 == 0) ? 7'000'000 : 4'000'000));
+			stats.push(frame(n, period, (n <= unevenUntil && n % 10 == 0) ? 6'200'000 : 4'000'000));
 		pml::metrics::VrrContext ctx;
 		ctx.refreshHz = 240;
 		ctx.driver = pml::metrics::DriverVrr::On;
@@ -209,7 +243,8 @@ TEST(Stats, VrrReadoutFromTheDisplayedFrames)
 	const Snapshot bad = run(1200);
 	EXPECT_EQ(bad.vrr.stability, VrrStability::Unstable);
 	EXPECT_EQ(bad.vrr.cause, pml::metrics::VrrCause::Display);
-	EXPECT_GT(bad.vrr.swingHz, 40.0) << "the panel runs at 111 Hz for one frame and 333 Hz for the next";
+	EXPECT_NEAR(bad.vrr.swingHz, (240.0 - 122.0) / 2, 1.5)
+	    << "the panel runs at 122 Hz for one frame and at its 240 Hz maximum for the next";
 
 	// Uneven for the first 4.8 s, even for the last 2.4 s: the live readout has recovered.
 	EXPECT_EQ(run(800).vrr.stability, VrrStability::Stable);

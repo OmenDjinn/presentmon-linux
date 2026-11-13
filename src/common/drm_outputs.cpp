@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MIT
 #include "pml/drm_outputs.hpp"
 
+#include <cmath>
 #include <cstring>
 #include <dlfcn.h>
 #include <fcntl.h>
@@ -38,6 +39,8 @@ struct DrmApi
 	decltype(&drmModeGetCrtc) GetCrtc = nullptr;
 	decltype(&drmModeFreeCrtc) FreeCrtc = nullptr;
 	const char *(*GetConnectorTypeName)(uint32_t) = nullptr;   // libdrm >= 2.4.112, optional
+	decltype(&drmGetVersion) GetVersion = nullptr;             // optional (the driver's name)
+	decltype(&drmFreeVersion) FreeVersion = nullptr;
 	bool ok = false;
 };
 
@@ -69,6 +72,8 @@ const DrmApi &drmApi()
 		ok = sym(api.GetCrtc, "drmModeGetCrtc") && ok;
 		ok = sym(api.FreeCrtc, "drmModeFreeCrtc") && ok;
 		sym(api.GetConnectorTypeName, "drmModeGetConnectorTypeName");
+		if (!sym(api.GetVersion, "drmGetVersion") || !sym(api.FreeVersion, "drmFreeVersion"))
+			api.GetVersion = nullptr;
 		api.ok = ok;
 	});
 	return api;
@@ -123,6 +128,14 @@ void readCard(const DrmApi &api, const char *path, std::vector<DrmOutput> *out)
 		::close(fd);
 		return;
 	}
+	std::string driver;
+	if (api.GetVersion)
+		if (drmVersion *v = api.GetVersion(fd))
+		{
+			if (v->name && v->name_len > 0)
+				driver.assign(v->name, size_t(v->name_len));
+			api.FreeVersion(v);
+		}
 	for (int i = 0; i < res->count_connectors; i++)
 	{
 		drmModeConnector *c = api.GetConnectorCurrent(fd, res->connectors[i]);
@@ -134,6 +147,7 @@ void readCard(const DrmApi &api, const char *path, std::vector<DrmOutput> *out)
 			continue;
 		}
 		DrmOutput o;
+		o.driver = driver;
 		const char *type = api.GetConnectorTypeName ? api.GetConnectorTypeName(c->connector_type) : nullptr;
 		o.name = std::string(type ? type : connectorTypeName(c->connector_type)) + "-" + std::to_string(c->connector_type_id);
 		bool found = false;
@@ -231,13 +245,17 @@ bool edidVerticalRange(const uint8_t *edid, size_t size, double *minHz, double *
 	return false;
 }
 
-const DrmOutput *pickVrrOutput(const std::vector<DrmOutput> &outputs, uint32_t width, uint32_t height)
+namespace {
+
+// The pickVrrOutput rule among the outputs `allowed` lets through.
+template <typename Allowed>
+const DrmOutput *bestVrrOutput(const std::vector<DrmOutput> &outputs, uint32_t width, uint32_t height, Allowed &&allowed)
 {
 	const DrmOutput *best = nullptr;
 	int bestRank = -1;
 	for (const DrmOutput &o : outputs)
 	{
-		if (o.enabled != 1)
+		if (o.enabled != 1 || !allowed(o))
 			continue;
 		int rank = 0;
 		if (width && height && o.width == width && o.height == height)
@@ -251,6 +269,55 @@ const DrmOutput *pickVrrOutput(const std::vector<DrmOutput> &outputs, uint32_t w
 		}
 	}
 	return best;
+}
+
+} // namespace
+
+const DrmOutput *pickVrrOutput(const std::vector<DrmOutput> &outputs, uint32_t width, uint32_t height)
+{
+	return bestVrrOutput(outputs, width, height, [](const DrmOutput &) { return true; });
+}
+
+const DrmOutput *pickOutput(const std::vector<DrmOutput> &outputs, uint32_t width, uint32_t height,
+                            uint64_t refreshDurationNs)
+{
+	// No allocation: the frame cap asks on every present while Auto is selected.
+	const double hz = refreshDurationNs ? 1.0e9 / double(refreshDurationNs) : 0.0;
+	const auto lit = [](const DrmOutput &o) { return o.refreshHz > 0; };   // no CRTC: nothing is shown there
+	const auto matches = [&](const DrmOutput &o) {
+		return lit(o) && hz > 0 && std::fabs(o.refreshHz - hz) <= hz * kRefreshMatch;
+	};
+	size_t matching = 0, shown = 0;
+	for (const DrmOutput &o : outputs)
+	{
+		matching += matches(o) ? 1 : 0;
+		shown += lit(o) ? 1 : 0;
+	}
+	// The outputs the swapchain can be on: those whose mode has its refresh cycle, else every lit one.
+	const bool byRefresh = matching > 0;
+	const auto candidate = [&](const DrmOutput &o) { return byRefresh ? matches(o) : lit(o); };
+	const size_t count = byRefresh ? matching : shown;
+	if (count == 0)
+		return nullptr;
+	const DrmOutput *first = nullptr;
+	for (const DrmOutput &o : outputs)
+		if (candidate(o))
+		{
+			first = &o;
+			break;
+		}
+	if (count == 1)
+		return first;
+	if (const DrmOutput *on = bestVrrOutput(outputs, width, height, candidate))
+		return on;
+	// Several candidates, none with VRR on. With the refresh cycle known they all run that mode with VRR off, and
+	// which one it is changes nothing but the name; without it the game's screen is unknown.
+	return byRefresh ? first : nullptr;
+}
+
+bool rescansAtVrrFloor(const DrmOutput &output)
+{
+	return output.driver == "nvidia-drm";
 }
 
 } // namespace pml

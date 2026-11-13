@@ -86,6 +86,7 @@ struct SwapchainState
 	bool counted = false;  // included in DeviceState::managedSwapchains
 	std::unique_ptr<VkTimingDriver> driver;
 	std::unique_ptr<TimingBroker> broker;
+	uint64_t refreshDurationAskedNs = 0;   // when info.refreshDurationNs was last asked for (updateRefreshDuration)
 	std::atomic<uint64_t> cpuFrames{0};  // presents counted for the overlay's CPU-only records
 
 	// Frame cap (frame_limiter.hpp). Presents to one swapchain are externally synchronized, so the limiter
@@ -1242,6 +1243,36 @@ VkResult applyLatencyModeLocked(DeviceState &dev, SwapchainState &sw)
 	return r;
 }
 
+// The driver's refresh cycle for the swapchain's surface (vkGetSwapchainTimingPropertiesEXT): the one thing that
+// tells which output the game is on (pml::pickOutput). The VRR readout and the auto cap need that output's VRR
+// state, not any output's. NVIDIA (620.70) reports 0 at swapchain creation: the cycle is known only once the
+// surface is on a screen, and it changes when the window moves to another one. So it is asked again every 250 ms.
+// The timingPropertiesCounter of the past-timing poll is no trigger: it stays 0 on MAILBOX and IMMEDIATE
+// swapchains although the properties did change (measured 2026-11-13; on FIFO it counts).
+// Called inside the app's vkQueuePresentKHR, which synchronizes the swapchain.
+constexpr uint64_t kRefreshDurationEveryNs = 250'000'000ull;
+
+void updateRefreshDuration(DeviceState &dev, SwapchainState &sw, uint64_t nowNs)
+{
+	if (!sw.managed || !dev.dt.GetSwapchainTimingPropertiesEXT || nowNs - sw.refreshDurationAskedNs < kRefreshDurationEveryNs)
+		return;
+	sw.refreshDurationAskedNs = nowNs;
+	VkSwapchainTimingPropertiesEXT props = {VK_STRUCTURE_TYPE_SWAPCHAIN_TIMING_PROPERTIES_EXT};
+	uint64_t counter = 0;
+	if (dev.dt.GetSwapchainTimingPropertiesEXT(dev.ctx.device, sw.handle, &props, &counter) != VK_SUCCESS)
+		return;   // VK_NOT_READY: not on a screen yet
+	if (props.refreshDuration == sw.info.refreshDurationNs)
+		return;
+	sw.info.refreshDurationNs = props.refreshDuration;
+	sw.overlayCtx.info.refreshDurationNs = props.refreshDuration;   // the overlay's VRR readout asks with it
+	// A fork()ed child must not write its parent's slot index into its own segment (teardownSwapchain).
+	Process &p = process();
+	if (p.segment && sw.segmentSlot != UINT32_MAX && sw.ownerPid == int(::getpid()))
+		pml::updateSwapchain(*p.segment, sw.segmentSlot, sw.info);
+	PML_LOG(LogLevel::Info, "swapchain %llu: refresh cycle %llu ns (%.3f Hz)", (unsigned long long)sw.serial,
+	        (unsigned long long)props.refreshDuration, props.refreshDuration ? 1e9 / double(props.refreshDuration) : 0.0);
+}
+
 struct CapPlan
 {
 	std::shared_ptr<SwapchainState> sw;  // whose cap state is used: the largest known swapchain of the present
@@ -1286,7 +1317,7 @@ CapPlan planCap(DeviceState &dev, const VkPresentInfoKHR *info, uint64_t nowNs)
 		return plan;
 	SwapchainState &sw = *plan.sw;
 	if (d.mode == uint32_t(pml::CapMode::Auto))
-		d = rt.decide(segment, sw.info.width, sw.info.height);
+		d = rt.decide(segment, sw.info.width, sw.info.height, sw.info.refreshDurationNs);
 	plan.active = true;
 	plan.decision = d;
 
@@ -1879,6 +1910,7 @@ bool presentImpl(DeviceState &dev, VkQueue queue, const VkPresentInfoKHR *pPrese
 			if (cap.lateWaitNs && s.states[i] == cap.sw)
 				sw->broker->noteCapWait(s.plans[i].token, cap.lateWaitNs);
 			sw->broker->endPresent(s.plans[i].token, endNs, r);
+			updateRefreshDuration(dev, *sw, endNs);
 			if (s.plans[i].forcedResult != VK_SUCCESS && r >= 0)
 			{
 				if (pPresentInfo->pResults)

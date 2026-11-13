@@ -120,16 +120,90 @@ TEST(CapRuntime, VrrInfoForTheOverlay)
 	std::vector<pml::DrmOutput> outputs = {output("DP-1", 0, 120.0, 1440, 2560), output("DP-2", 1, 239.991, 2560, 1440)};
 	outputs[1].edidMinHz = 48;
 	CapRuntime rt([&] { return outputs; }, false);
-	EXPECT_EQ(rt.vrrInfo(2560, 1440, 1).vrr, 0) << "outputs not read yet";
+	EXPECT_EQ(rt.vrrInfo(2560, 1440, 0, 1).vrr, 0) << "outputs not read yet";
 	rt.pollOutputs();
-	AutoCapInfo info = rt.vrrInfo(2560, 1440, 1);
+	AutoCapInfo info = rt.vrrInfo(2560, 1440, 0, 1);
 	EXPECT_EQ(info.vrr, 1);
 	EXPECT_NEAR(info.refreshHz, 239.991, 1e-9);
 	EXPECT_EQ(info.vrrMinHz, 48.0);
+	EXPECT_FALSE(info.floorRescan) << "no driver name: how it behaves at the floor is unknown";
 	EXPECT_EQ(rt.decide(nullptr, 2560, 1440).fps, 0.0) << "asking caps nothing";
 	outputs[1].enabled = 0;
 	rt.pollOutputs();
-	EXPECT_EQ(rt.vrrInfo(2560, 1440, 1).vrr, 2);
+	EXPECT_EQ(rt.vrrInfo(2560, 1440, 0, 1).vrr, 2);
+	EXPECT_EQ(rt.vrrInfo(2560, 1440, 0, 1).refreshHz, 0.0) << "two screens, neither with VRR on: which one is unknown";
+}
+
+// This machine, 2026-11-13: DP-1 (165 Hz) on KWin's VRR policy "Always", so its VRR_ENABLED is always 1; DP-2
+// (240 Hz) on "Automatic", on only while the game is the active fullscreen window. Both run 2560x1440. A game on
+// DP-2 whose VRR is off was reported with DP-1's state: the readout showed a moving rate where the monitor showed
+// a fixed 240 Hz, and Auto capped it for a 165 Hz VRR screen. The swapchain's refresh cycle tells the screen.
+TEST(CapRuntime, TheGamesOwnOutputNotAnotherOneWithVrrOn)
+{
+	EnvGuard env({{"PRESENTMON_FPS_CAP", "auto"}});
+	const uint64_t dp1Ns = 6060606, dp2Ns = 4166822;   // what the driver reported for the two screens
+	std::vector<pml::DrmOutput> outputs = {output("DP-1", 1, 165.000487, 2560, 1440), output("DP-2", 0, 239.991431, 2560, 1440)};
+	outputs[0].driver = outputs[1].driver = "nvidia-drm";
+	outputs[0].edidMaxHz = 180;
+	CapRuntime rt([&] { return outputs; }, false);
+	rt.pollOutputs();
+
+	// On DP-2, VRR off there: off with DP-2's refresh, and no auto cap.
+	AutoCapInfo info = rt.vrrInfo(2560, 1440, dp2Ns, 1);
+	EXPECT_EQ(info.vrr, 2);
+	EXPECT_NEAR(info.refreshHz, 239.991, 1e-3);
+	CapDecision d = rt.decide(nullptr, 2560, 1440, dp2Ns);
+	EXPECT_EQ(d.autoInfo.vrr, 2);
+	EXPECT_EQ(d.fps, 0.0);
+	// Without the refresh cycle (no present timing) the old guess stays: the one output with VRR on.
+	EXPECT_EQ(rt.vrrInfo(2560, 1440, 0, 1).vrr, 1);
+	EXPECT_NEAR(rt.vrrInfo(2560, 1440, 0, 1).refreshHz, 165.0, 1e-3);
+
+	// The game becomes the active fullscreen window: KWin turns DP-2's VRR on.
+	outputs[1].enabled = 1;
+	rt.pollOutputs();
+	info = rt.vrrInfo(2560, 1440, dp2Ns, 1);
+	EXPECT_EQ(info.vrr, 1);
+	EXPECT_NEAR(info.refreshHz, 239.991, 1e-3);
+	EXPECT_EQ(info.vrrMinHz, 48.0);
+	EXPECT_TRUE(info.floorRescan) << "nvidia-drm re-scans at the floor";
+	EXPECT_EQ(rt.decide(nullptr, 2560, 1440, dp2Ns).fps, 223.0);
+
+	// The window is moved to DP-1: the driver reports DP-1's refresh cycle.
+	info = rt.vrrInfo(2560, 1440, dp1Ns, 1);
+	EXPECT_EQ(info.vrr, 1);
+	EXPECT_NEAR(info.refreshHz, 165.0, 1e-3);
+	EXPECT_EQ(rt.decide(nullptr, 2560, 1440, dp1Ns).fps, 157.0);
+}
+
+TEST(CapRuntime, PickOutputByRefreshCycle)
+{
+	std::vector<pml::DrmOutput> outputs = {output("DP-1", 1, 165.000487, 2560, 1440), output("DP-2", 0, 239.991431, 2560, 1440)};
+	EXPECT_EQ(pml::pickOutput(outputs, 2560, 1440, 4166822)->name, "DP-2");
+	EXPECT_EQ(pml::pickOutput(outputs, 2560, 1440, 6060606)->name, "DP-1");
+	EXPECT_EQ(pml::pickOutput(outputs, 0, 0, 4166822)->name, "DP-2") << "the size does not matter";
+	// A refresh cycle no output has (a mode change between the two reads): the guess.
+	EXPECT_EQ(pml::pickOutput(outputs, 2560, 1440, 8333333)->name, "DP-1");
+	// 59.94 and 60 Hz are told apart.
+	std::vector<pml::DrmOutput> tv = {output("HDMI-A-1", 0, 59.94, 3840, 2160), output("DP-1", 0, 60.0, 3840, 2160)};
+	EXPECT_EQ(pml::pickOutput(tv, 3840, 2160, 16683350)->name, "HDMI-A-1");
+	EXPECT_EQ(pml::pickOutput(tv, 3840, 2160, 16666667)->name, "DP-1");
+	EXPECT_EQ(pml::pickOutput(tv, 3840, 2160, 0), nullptr) << "two screens, VRR off on both, no refresh cycle";
+	// Two screens in the same mode: the one with VRR on, else either (the same refresh, VRR off).
+	std::vector<pml::DrmOutput> twins = {output("DP-1", 0, 144.0, 2560, 1440), output("DP-2", 1, 144.0, 2560, 1440)};
+	EXPECT_EQ(pml::pickOutput(twins, 2560, 1440, 6944444)->name, "DP-2");
+	twins[1].enabled = 0;
+	ASSERT_NE(pml::pickOutput(twins, 2560, 1440, 6944444), nullptr);
+	EXPECT_EQ(pml::pickOutput(twins, 2560, 1440, 6944444)->enabled, 0);
+	// One screen: that one, whatever is known.
+	std::vector<pml::DrmOutput> one = {output("eDP-1", 0, 60.0, 1920, 1080)};
+	EXPECT_EQ(pml::pickOutput(one, 1920, 1080, 0)->name, "eDP-1");
+	// A connected output without a CRTC shows nothing.
+	one[0].refreshHz = 0;
+	EXPECT_EQ(pml::pickOutput(one, 1920, 1080, 0), nullptr);
+	EXPECT_EQ(pml::pickOutput({}, 1920, 1080, 16666667), nullptr);
+	EXPECT_TRUE(pml::rescansAtVrrFloor([] { pml::DrmOutput o; o.driver = "nvidia-drm"; return o; }()));
+	EXPECT_FALSE(pml::rescansAtVrrFloor([] { pml::DrmOutput o; o.driver = "amdgpu"; return o; }()));
 }
 
 TEST(CapRuntime, PickVrrOutputBySize)

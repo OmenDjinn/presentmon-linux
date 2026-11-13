@@ -8,10 +8,10 @@ Status: **M0/M1 in progress on branch `m1-cli-overlay`** (CLI collector + in-gam
 | Item | Value |
 |---|---|
 | OS / kernel | CachyOS, 7.3.1-1-cachyos |
-| GPU / driver | RTX 5070 Ti, NVIDIA open kernel module 615.78.08, Vulkan 1.4.351 |
+| GPU / driver | RTX 5070 Ti, NVIDIA open kernel module 615.78.08, Vulkan 1.4.351 (620.70.06 from 2026-11-13) |
 | Desktop | Plasma / KWin 6.8.2, Wayland |
 | DP-2 (primary) | 2560x1440 @ 240 Hz, VRR Automatic, **HDR on** |
-| DP-1 | 2560x1440 @ 120 Hz rotated (portrait, 1440x2560 logical), VRR Never, HDR off |
+| DP-1 | 2560x1440 @ 120 Hz rotated (portrait, 1440x2560 logical), VRR Never, HDR off (from 2026-11-13: 165 Hz, VRR Always, EDID range 48-180 Hz; driver 620.70.06) |
 | `/dev/uinput` | already rw for the desktop user through an ACL, so no udev rule or `usermod` is needed |
 | `/dev/input/event*` (real input) | not readable (user is not in `input`) |
 | Proton | GE-Proton11-11, proton-cachyos-11.0, **proton-wineland-11.0**, UMU-Proton-10.0-4 |
@@ -318,22 +318,53 @@ Zero means "missing" throughout PresentMon's code, so a real timestamp must neve
 ### 3.4.1 VRR readout (`src/metrics/include/pml/metrics/vrr.hpp`)
 Modelled on a monitor's refresh-rate OSD: the rate the panel refreshes at now, how far it swings, and one word for
 what kind of swing it is. One analyzer for the overlay and the GUI's Live page (the live windows below; the Live
-page adds the driver's VRR state) and its Captures page (every frame of a CSV). Under VRR the panel refreshes when a
-frame arrives, so 1000 / (time since the previous screen update) is its refresh rate for that frame.
+page adds the driver's VRR state) and its Captures page (every frame of a CSV).
 
-Overlay row: `VRR    141 Hz  ±3   stable`, with the cause on a second line when jittery or unstable;
-`VRR    off    fixed 120 Hz` with VRR off; `VRR?` when the data cannot tell whether VRR is on.
+A monitor's counter measures the refresh cycles the panel receives, not the game's frames, so the readout counts
+**panel refreshes** (the first version counted displayed frames and disagreed with the monitor, 2026-11-13):
+- Inside the VRR range the panel refreshes when a frame arrives: one refresh per displayed frame, at
+  1000 / (time since the previous screen update) Hz.
+- A scan-out takes 1 / (the mode's rate): the panel cannot refresh faster. A frame that comes while one is running
+  waits for its end (FIFO, MAILBOX) or tears into it and starts no refresh of its own (IMMEDIATE under VRR on KWin).
+- Never slower than the panel's lowest VRR rate (EDID). What the source does when no frame comes in time depends on
+  the driver (`VrrFloor`). NVIDIA (`Rescan`): the display engine scans the previous frame out again 1 / floor after
+  the last refresh **started**, and again every 1 / floor while nothing comes (FINDINGS 7). Other drivers: not
+  modelled (no such refreshes counted).
+- So the readout walks the displayed frames and keeps the time since the panel's last refresh started: every
+  1 / floor of it is a re-scan (`Rescan`). A frame that cannot tear then starts a refresh (one that waited comes
+  0.92-0.99 of a scan-out after the re-scan started; one that seems to come under half a scan-out after it came
+  just before it, timestamp noise). A frame that may tear (`VrrFrame::tears`, IMMEDIATE) starts one only if at
+  least 0.9 of a scan-out has passed since the last refresh started, else it tore in and the time runs on. Rates
+  are capped at the mode's. 30 fps on a 48 Hz floor: the panel alternates 20.8 ms and
+  12.5 ms, 60 refreshes a second. 45 fps: 67.5 with MAILBOX (frames 19.4 / 25.0 ms), 60 with IMMEDIATE (frames
+  every 22.2 ms, tearing into the re-scans). 400 fps IMMEDIATE on a 240 Hz mode: 200.
+- When frames stop (live: nothing new on screen for 750 ms and four frame intervals) the panel sits at its floor:
+  verdict "no new frames", rate = the floor (`Rescan`) instead of the last rate held forever.
+- Not seen: refreshes the compositor adds without a game frame (KWin's cursor-only commits while the game runs under
+  about 50 fps, FINDINGS 7).
+
+Overlay row: `VRR    141 Hz  ±3   stable`, with the cause on a second line when jittery, unstable or below range
+(`VRR     60 Hz  ±16  below range` / `frame rate under the VRR floor`); `VRR    off    fixed 240 Hz` with VRR off;
+`VRR?` when the data cannot tell whether VRR is on.
 
 | Number | Live (overlay, Live page) | Capture |
 |---|---|---|
-| refresh rate | screen updates over the last 250 ms of screen time (a monitor's OSD averages a few frames too); the fixed rate with VRR off | median of the per-frame rates |
-| swing (±) | half the spread between the 5th and 95th percentile of the per-frame rates, last 2 s | the same over the recording |
+| refresh rate | panel refreshes over the last 250 ms of screen time (a monitor's OSD averages a few too); the fixed rate with VRR off; the floor with "no new frames" | median of the per-frame rates |
+| swing (±) | half the spread between the 5th and 95th percentile of the per-refresh rates, last 2 s | the same over the recording |
 | verdict | last 2 s (at least 30 frames) | every frame |
 
 Verdict, first that applies (events per pair of consecutive screen updates, thresholds of the earlier 0-100 score):
+- **fixed**: VRR is off on the game's output.
+- **no new frames**: see above (live only).
+- **below range**: the panel refreshed without >= 15 % of the frames (`Rescan`, and the median interval is not
+  inside the range): the game runs under the VRR range. Named before "unstable" because it is the cause: a 45 fps
+  cap on a 48-240 Hz screen reaches it alternating 19.4 / 25.0 ms.
 - **unstable**: >= 15 % of the pairs jump by more than max(2 ms, 25 % of the median interval) ("uneven").
-- **stutter**: a frame on screen more than 2.5x the median, at least 0.5 per second (one in the live 2 s).
-- **LFC**: the interval crosses the panel's lowest VRR rate, at least 0.5 per second (needs the EDID range).
+- **stutter**: a frame on screen more than 2.5x the median, at least 0.5 per second (one in the live 2 s). With
+  `Rescan` also a frame the panel refreshed without, in a game whose median interval is inside the range (up to
+  0.75 / floor): a 100 fps game with one 24 ms frame has a hitch, not a frame rate under the floor.
+- **below range**: at least 0.5 per second of frames the panel refreshed without (`Rescan`, median not inside the
+  range), else of crossings of the panel's lowest VRR rate (needs the EDID range).
 - **jittery**: >= 5 % uneven pairs.
 - **at max**: the game runs at the refresh cap: VRR has nothing to vary.
 - **varying**: the 250 ms rate moved by >= 15 % of the median within the window: VRR follows a frame rate that
@@ -356,22 +387,40 @@ milliseconds, while the readout shows Hz like a monitor: Hz is not linear in tim
   while the game's intervals do not (the lowest common rate that explains it when the output's is unknown, so the
   overlay finds "fixed 120 Hz" by itself); **idle** (at max) when the game runs at or above the refresh rate;
   **active**; **unknown** when it cannot be told without the driver (the game itself on the grid, e.g. FIFO at the
-  refresh rate, or no known refresh rate: NVIDIA reports no refresh duration under VRR): the overlay then shows
-  `VRR?`.
+  refresh rate, and DRM unreadable): the overlay then shows `VRR?`.
+- **The game's own output** decides the driver state, not "an output with VRR on" (`pml::pickOutput`,
+  `src/common/drm_outputs.cpp`). With one screen on KWin's VRR policy "Always" its `VRR_ENABLED` is 1 all the time;
+  a game on another screen whose VRR is off was reported as VRR on at its frame rate while that monitor showed its
+  fixed rate (the first version, 2026-11-13). The driver tells which output it is: the swapchain's refresh cycle
+  (`vkGetSwapchainTimingPropertiesEXT`, FINDINGS 1) equals one output's mode refresh to a few parts per million
+  (4166822 ns against 239.991431 Hz, 6060606 ns against 165.000487 Hz; matched within 0.01 %). The layer asks
+  every 250 ms inside the present, keeps `SwapchainInfo::refreshDurationNs` in the segment current, and the readout
+  follows a window dragged to another screen. Several outputs in that mode, or no refresh cycle (no present
+  timing): the old guess among them (the one with VRR on, by swapchain size, orientation, refresh). That guess is
+  right under KWin's default policy and wrong when the game sits on a VRR-off screen while a screen in the same
+  mode has VRR "Always" on.
 - The GUI reads, read-only through libdrm (`backend/drmvrr.cpp`), each connected output's CRTC `VRR_ENABLED`,
-  mode refresh and EDID range descriptor. KWin enables VRR only for the active fullscreen window, so the one
-  output with VRR on is the game's; none on = VRR off (e.g. the game is not the active window). Its panel draws a
-  bar over the EDID range with the swing band and a marker at the current rate.
-- The overlay gets the same driver state from the layer's DRM thread (`CapRuntime::vrrInfo`, 3.4.2): while the VRR
+  mode refresh, EDID range descriptor and the card's driver name, and gives every swapchain the state of its own
+  output. Its panel draws a bar over the EDID range with the swing band and a marker at the current rate, and names
+  the output ("Driver: VRR off on DP-2, fixed 240 Hz").
+- The overlay gets the same from the layer's DRM thread (`CapRuntime::vrrInfo`, 3.4.2): while the VRR
   row is shown it asks every 250 ms, which keeps the thread reading the outputs every 500 ms (off the present
   path; it stops 2 s after the last request). Without libdrm or DRM access in the game's container it falls back
-  to the timing alone.
+  to the timing alone, on the grid of the swapchain's refresh cycle.
 - Measured on DP-2 (240 Hz, VRR on throughout per `VRR_ENABLED`; vk_truth fullscreen, mailbox, 8 s each,
   2026-11-13): cap 141 -> `141 Hz ±2 stable`; cap 300 -> `240 Hz ±1 at max`; cap 60 -> `60 Hz ±0 stable`;
   120 fps with 0-5 ms random extra work -> `119 Hz ±60 unstable` (game frame times swing); cap 141 with a 40 ms hitch
   every 90 frames -> `stutter` (123 Hz while a hitch is in the last 250 ms).
-- Below the VRR floor the driver repeats frames (LFC) and the panel runs at a multiple of the frame rate. The
-  readout shows the rate frames arrive at; a monitor's own OSD shows the multiplied rate.
+- Measured with the refresh counting (2026-11-13, NVIDIA 620.70, vk_truth, mailbox). Fullscreen on DP-2 (240 Hz,
+  VRR on): cap 141 -> `141 Hz ±6 stable`; cap 300 -> `240 Hz ±1 at max`; cap 30 -> `60 Hz ±16 below range` (frames
+  every 33.3 ms, the panel at 48 / 80 Hz; ±33 in a stretch with late frames); cap 45 -> `68 Hz ±96 below range`
+  (frames alternate 19.4 / 25.0 ms; the panel refreshes after 19.4, 20.8 and 4.2 ms). With IMMEDIATE: cap 45 ->
+  `60 Hz ±96 below range`, cap 400 -> `200 Hz at max`. A window on DP-1 (VRR "Always") dragged to DP-2 (VRR off
+  there):
+  `141 Hz` active, then `off  fixed 240 Hz` within a second, where the first version kept showing
+  `142 Hz ±71 unstable`.
+- The ±swing can exceed the rate itself below the floor (48 to 240 Hz around a mean of 68): it is half the
+  5th-95th percentile spread of the per-refresh rates, which is not symmetric around the mean.
 
 ### 3.4.2 Frame caps (`src/layer/frame_limiter.*`, `frame_cap.*`, the cap code in `layer.cpp`)
 Research (2026-11-09; papers, DXVK, vkd3d-proton, MangoHud 0.8.4, Special K, LatencyFleX, low_latency_layer,
@@ -417,10 +466,13 @@ the next present's record); `presentStartNs`/`presentEndNs` stay the app's view 
 time in Present(), as in PresentMon on Windows).
 
 **Auto** (`CapRuntime`): floor(hz - hz^2/3600) (224 at 240 Hz, 223 at 239.99, 138 at 144; a community estimate of
-NVIDIA's Reflex + G-SYNC cap, no NVIDIA source) for the output whose CRTC has `VRR_ENABLED` = 1, picked by swapchain
-size, then orientation, then refresh; no cap while VRR is off. A thread reads DRM through `dlopen("libdrm.so.2")`
-every 500 ms while Auto is selected or the overlay's VRR row asked in the last 2 s (3.4.1), and idles otherwise. Limitation: a windowed game is not matched to its own
-output; with VRR on another output (KWin "Always", or another fullscreen app) Auto uses that output's rate.
+NVIDIA's Reflex + G-SYNC cap, no NVIDIA source) for the game's own output while its CRTC has `VRR_ENABLED` = 1
+(`pml::pickOutput`, 3.4.1: the output whose mode refresh equals the swapchain's refresh cycle); no cap while VRR is
+off there. A thread reads DRM through `dlopen("libdrm.so.2")`
+every 500 ms while Auto is selected or the overlay's VRR row asked in the last 2 s (3.4.1), and idles otherwise.
+Limitation: without a refresh cycle from the driver (no present timing, e.g. Xwayland) the output is a guess, the
+one with VRR on (by swapchain size, orientation, refresh); with VRR on another output (KWin "Always", or another
+fullscreen app) Auto then uses that output's rate.
 
 **Control**: `PRESENTMON_FPS_CAP=<fps>|auto|off`, `PRESENTMON_CAP_PLACEMENT=late|early`, `PRESENTMON_CAP_REFLEX=0`
 seed the segment's 64-byte `CapControl` block; `presentmon cap` and the GUI rewrite it live. Its settings half is a

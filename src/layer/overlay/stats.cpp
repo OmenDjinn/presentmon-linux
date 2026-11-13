@@ -115,6 +115,7 @@ void OverlayStats::addDisplayRow(const pml::metrics::Row &row)
 	d.untilDisplayedMs = float(m.msUntilDisplayed);
 	d.displayLatencyMs = float(m.msDisplayLatency);
 	d.betweenPresentsMs = float(m.msBetweenPresents);
+	d.tears = row.allowsTearing;
 	if (!IsMissingFrameMetricValue(m.msReadyTimeToDisplayLatency) && m.msReadyTimeToDisplayLatency >= 0)
 		d.readyToScreenMs = float(m.msReadyTimeToDisplayLatency);
 	displayed_.push_back(d);
@@ -277,11 +278,16 @@ void OverlayStats::recompute(uint64_t nowNs)
 		// needs many frames), the refresh rate now and its swing from the newest ones (pml::metrics::kVrrLive).
 		vrrScratch_.clear();
 		for (const DisplaySample &d : displayed_)
-			vrrScratch_.push_back({d.betweenPresentsMs, d.betweenDisplayMs});
+			vrrScratch_.push_back({d.betweenPresentsMs, d.betweenDisplayMs, d.tears});
 		pml::metrics::VrrContext ctx = vrrContext_;
 		if (ctx.refreshHz <= 0 && info_.refreshDurationNs)
 			ctx.refreshHz = 1e9 / double(info_.refreshDurationNs);
-		s.vrr = pml::metrics::analyzeVrr(vrrScratch_, ctx, pml::metrics::kVrrLive);
+		// Live: how long ago the newest of these frames reached the screen, so the readout can tell when frames
+		// stopped coming (it would hold the last rate while the panel sits at its floor).
+		pml::metrics::VrrOptions options = pml::metrics::kVrrLive;
+		if (newestScreen && nowNs > newestScreen)
+			options.sinceLastMs = double(nowNs - newestScreen) * 1e-6;
+		s.vrr = pml::metrics::analyzeVrr(vrrScratch_, ctx, options);
 	}
 
 	if (s.idle)

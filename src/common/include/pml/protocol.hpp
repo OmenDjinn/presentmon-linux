@@ -299,7 +299,7 @@ struct alignas(8) CapControl
 	uint32_t method;            // CapMethod in force on the most recently presented capped swapchain
 	uint32_t effectiveMilli;    // cap in force, 1/1000 fps (0 = none)
 	uint32_t refreshMilli;      // Auto: refresh of the VRR output used, 1/1000 Hz (0 = unknown)
-	uint32_t vrr;               // Auto: 0 unknown, 1 VRR on (an output has VRR_ENABLED), 2 VRR off everywhere
+	uint32_t vrr;               // Auto, the game's output: 0 unknown, 1 VRR on, 2 VRR off (or off on every output)
 	uint32_t meanWaitUs;        // mean limiter wait per frame over the last ~second
 	uint32_t lateP99Us;         // p99 of how late the limiter released a frame after its deadline
 	uint32_t appliedGeneration; // the reader generation whose settings this status reflects (0 = none yet)

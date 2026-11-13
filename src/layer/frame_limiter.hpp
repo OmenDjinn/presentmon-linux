@@ -96,12 +96,14 @@ private:
 inline constexpr double kMinCapFps = 1.0;
 inline constexpr double kMaxCapFps = 10000.0;
 
-// What the auto cap knows about the output (from DRM: CRTC VRR_ENABLED, mode refresh, EDID range).
+// What the auto cap and the VRR readout know about the game's output (from DRM: CRTC VRR_ENABLED, mode refresh,
+// EDID range, the card's driver; pml::pickOutput finds the output).
 struct AutoCapInfo
 {
-	int vrr = 0;               // 0 unknown, 1 an output has VRR on, 2 VRR off everywhere
-	double refreshHz = 0;      // the VRR output's mode refresh (its VRR maximum)
+	int vrr = 0;               // the game's output: 0 unknown, 1 VRR on, 2 VRR off (or off on every output)
+	double refreshHz = 0;      // its mode refresh (the VRR maximum); 0 = unknown, also when the output is
 	double vrrMinHz = 0;       // its EDID VRR floor
+	bool floorRescan = false;  // pml::rescansAtVrrFloor: the display engine re-scans by itself at the floor
 };
 
 // Cap just under the VRR maximum: floor(hz - hz^2/3600) (224 at 240 Hz, 138 at 144, 116 at 120). Community

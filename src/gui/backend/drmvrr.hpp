@@ -15,10 +15,13 @@ using OutputVrr = pml::DrmOutput;
 using pml::edidVerticalRange;
 using pml::readDrmOutputs;
 
-// The context the VRR verdict gets from the outputs: the one output with VRR_ENABLED on is the game's (KWin enables
-// VRR only for the active fullscreen window), so: driver On, its refresh as the maximum and its EDID minimum as the
-// floor. When every readable output reports VRR off: driver Off. Otherwise unknown.
-// `which` (optional) gets the name of the output used ("" when none).
-pml::metrics::VrrContext vrrContextFromOutputs(const std::vector<OutputVrr> &outputs, std::string *which = nullptr);
+// The context the VRR readout gets from the outputs, for a swapchain of that size whose surface has that refresh
+// cycle (SwapchainInfo::refreshDurationNs, 0 = unknown): the output the game is on (pml::pickOutput) gives the
+// driver's state (its VRR_ENABLED), its mode refresh as the maximum, its EDID minimum as the floor and how the
+// display engine behaves there. When that output cannot be told and every readable output reports VRR off: driver
+// Off. Otherwise unknown. Without an output the refresh is the swapchain's own.
+// `used` (optional) gets the output used, an element of `outputs` (null when none).
+pml::metrics::VrrContext vrrContextFromOutputs(const std::vector<OutputVrr> &outputs, uint32_t width, uint32_t height,
+                                               uint64_t refreshDurationNs, const OutputVrr **used = nullptr);
 
 } // namespace pml::gui

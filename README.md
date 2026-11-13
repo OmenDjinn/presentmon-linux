@@ -181,9 +181,12 @@ Environment (set on the game):
 
 Runtime control from another terminal: `presentmon overlay toggle` (or show/hide/status, `--position`, `--scale`).
 
-The **VRR** row works like a monitor's refresh-rate counter: the refresh rate now (last 250 ms), how far it swings
-(±, last 2 s) and a verdict: stable, varying, at max, jittery, stutter, LFC or unstable, with the cause when it
-jitters (`VRR    141 Hz  ±3   stable`; `off  fixed 120 Hz` without VRR). The GUI shows the same with a bar over the
+The **VRR** row works like a monitor's refresh-rate counter: the panel's refresh rate now (last 250 ms), how far it
+swings (±, last 2 s) and a verdict: stable, varying, at max, jittery, stutter, below range, unstable or no new
+frames, with the cause when it jitters (`VRR    141 Hz  ±3   stable`; `off  fixed 240 Hz` without VRR on the game's
+screen). It counts panel refreshes, not frames, because that is what a monitor's counter measures: a 30 fps game on
+a 48 Hz VRR floor reads about `60 Hz  ±16  below range` on NVIDIA, where the panel is refreshed twice per frame
+(after 20.8 and 12.5 ms). The refreshes are worked out from the frames' screen times (`docs/FINDINGS.md` 7). The GUI shows the same with a bar over the
 screen's VRR range; how it is judged: `docs/ARCHITECTURE.md` 3.4.1. The FPS section also shows Blackbird PC Tech's
 GQI next to the lows.
 

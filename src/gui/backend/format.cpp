@@ -134,8 +134,12 @@ QString vrrDetailText(const pml::metrics::VrrReadout &v)
 	                     .arg(v.unevenDisplayPct, 0, 'f', 1)
 	                     .arg(qulonglong(v.stutters))
 	                     .arg(v.stutters == 1 ? QStringLiteral("stutter") : QStringLiteral("stutters"));
-	if (!std::isnan(v.lfcCrossings))
-		detail += QStringLiteral(" · %1 LFC crossings").arg(qulonglong(v.lfcCrossings));
+	if (!std::isnan(v.rescans))
+		detail += QStringLiteral(" · %1 %2 without a new frame (below the VRR floor)")
+		              .arg(qulonglong(v.rescans))
+		              .arg(v.rescans == 1 ? QStringLiteral("refresh") : QStringLiteral("refreshes"));
+	else if (!std::isnan(v.lfcCrossings))
+		detail += QStringLiteral(" · %1 crossings of the VRR floor").arg(qulonglong(v.lfcCrossings));
 	detail += QStringLiteral(" · %1 frames in %2 s").arg(qulonglong(v.judgedFrames)).arg(v.judgedSeconds, 0, 'f', 1);
 	return detail;
 }

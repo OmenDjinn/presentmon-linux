@@ -60,8 +60,9 @@ public:
 	// Parses one PRESENTMON_FPS_CAP value into mode + fpsMilli; false if it is not one.
 	static bool parseCapValue(const char *text, uint32_t *mode, uint32_t *fpsMilli);
 
-	// Per present. `segment` may be null. width/height: the swapchain's (picks the VRR output for Auto).
-	CapDecision decide(pml::Segment *segment, uint32_t width, uint32_t height);
+	// Per present. `segment` may be null. width/height and refreshDurationNs (the driver's refresh cycle for the
+	// swapchain's surface, 0 = unknown): the swapchain's, which find its output for Auto (pml::pickOutput).
+	CapDecision decide(pml::Segment *segment, uint32_t width, uint32_t height, uint64_t refreshDurationNs = 0);
 
 	// True once any cap was ever in force: until then presents skip the cap code entirely.
 	bool everActive() const { return everActive_.load(std::memory_order_relaxed); }
@@ -78,14 +79,15 @@ public:
 	// Forgets the outputs (Auto deselected: the next Auto starts from a fresh read, never from a stale VRR state).
 	void forgetOutputs();
 
-	// The VRR state of the output a `width` x `height` swapchain most likely uses, for the overlay's VRR readout
-	// (pml::pickVrrOutput, as Auto): also keeps the output thread reading DRM for the next 2 s. vrr 0 (unknown) until
-	// the first read and when DRM is unreadable. A short lock; call it a few times per second, not per present.
-	AutoCapInfo vrrInfo(uint32_t width, uint32_t height, uint64_t nowNs);
+	// The VRR state of the output a `width` x `height` swapchain with that refresh cycle is on, for the overlay's
+	// VRR readout (pml::pickOutput, as Auto): also keeps the output thread reading DRM for the next 2 s. vrr 0
+	// (unknown) until the first read and when DRM is unreadable. A short lock; call it a few times per second,
+	// not per present.
+	AutoCapInfo vrrInfo(uint32_t width, uint32_t height, uint64_t refreshDurationNs, uint64_t nowNs);
 
 private:
 	void ensureThread();
-	AutoCapInfo autoInfoFor(uint32_t width, uint32_t height);
+	AutoCapInfo autoInfoFor(uint32_t width, uint32_t height, uint64_t refreshDurationNs);
 	uint32_t currentMode() const { return uint32_t(settings_.load(std::memory_order_relaxed) >> 32) & 0xffu; }
 	static void atforkPrepare();
 	static void atforkParent();
