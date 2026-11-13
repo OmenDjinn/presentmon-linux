@@ -29,7 +29,9 @@ cp "$src/LICENSE" "$src/THIRD_PARTY_NOTICES.md" "$appdir/usr/share/presentmon-li
 
 export QMAKE="${QMAKE:-$(command -v qmake6)}"
 export QML_SOURCES_PATHS="$src/src/gui/qml:$src/packaging/appimage/qml-imports"
-export EXTRA_QT_MODULES="svg"
+# Wayland is not found by the plugin's dependency scan (it is loaded at run time), nor is offscreen (tests).
+export EXTRA_QT_MODULES="svg;waylandcompositor"
+export EXTRA_PLATFORM_PLUGINS="libqwayland-generic.so;libqwayland-egl.so;libqoffscreen.so"
 export APPIMAGE_EXTRACT_AND_RUN=1          # no FUSE in containers
 export LINUXDEPLOY_OUTPUT_VERSION="$version"
 export NO_STRIP=1                          # linuxdeploy's bundled strip does not know newer ELF sections
