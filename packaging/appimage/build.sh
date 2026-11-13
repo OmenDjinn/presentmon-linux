@@ -28,6 +28,15 @@ sed "s|@PML_LAYER_API_VERSION@|$api|" "$src/src/layer/VkLayer_presentmon.json.in
 cp "$src/LICENSE" "$src/THIRD_PARTY_NOTICES.md" "$appdir/usr/share/presentmon-linux/"
 
 export QMAKE="${QMAKE:-$(command -v qmake6)}"
+# Kirigami's platform plugin of the org.kde.desktop style (colours and fonts of the desktop): loaded by name at
+# run time, so no scan finds it.
+plugins="$("$QMAKE" -query QT_INSTALL_PLUGINS)"
+deps=""
+if [ -d "$plugins/kf6/kirigami/platform" ]; then
+	mkdir -p "$appdir/usr/plugins/kf6/kirigami"
+	cp -r "$plugins/kf6/kirigami/platform" "$appdir/usr/plugins/kf6/kirigami/"
+	deps="--deploy-deps-only $appdir/usr/plugins/kf6/kirigami/platform"
+fi
 export QML_SOURCES_PATHS="$src/src/gui/qml:$src/packaging/appimage/qml-imports"
 # Wayland is not found by the plugin's dependency scan (it is loaded at run time), nor is offscreen (tests).
 export EXTRA_QT_MODULES="svg;waylandcompositor"
@@ -41,5 +50,5 @@ cd "$out"
 	--desktop-file "$src/packaging/appimage/presentmon-gui.desktop" \
 	--icon-file "$src/src/gui/data/presentmon-gui.svg" \
 	--custom-apprun "$src/packaging/appimage/AppRun" \
-	--plugin qt --output appimage
+	$deps --plugin qt --output appimage
 ls -la "$out"/PresentMon-*.AppImage
