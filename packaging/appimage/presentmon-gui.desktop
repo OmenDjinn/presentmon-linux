@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=PresentMon
+GenericName=Frame Time Monitor
+Comment=Live frame times, overlay control and CSV captures for Vulkan and Proton games
+Exec=presentmon-gui
+Icon=presentmon-gui
+Terminal=false
+Categories=System;Monitor;
+Keywords=fps;frametime;frame time;benchmark;vulkan;proton;dxvk;presentmon;overlay;
+StartupWMClass=presentmon-gui
+StartupNotify=true

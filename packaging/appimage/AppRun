@@ -1,0 +1,43 @@
+#!/bin/sh
+# SPDX-License-Identifier: MIT
+# Entry point of the presentmon-linux AppImage.
+#   PresentMon.AppImage                      the GUI
+#   PresentMon.AppImage presentmon <args>    the presentmon CLI (also when the AppImage is run through a link
+#                                            named "presentmon")
+#   PresentMon.AppImage --install-layer      copy the Vulkan layer and its manifest into ~/.local, where the
+#                                            Vulkan loader of every game finds it (games cannot load a library
+#                                            from inside an AppImage: it is only mounted while this runs)
+#   PresentMon.AppImage --remove-layer       remove them again
+set -eu
+here="$(dirname "$(readlink -f "$0")")"
+data="$here/usr/share/presentmon-linux"
+libdir="${PRESENTMON_LAYER_DIR:-$HOME/.local/lib}"
+manifestdir="${XDG_DATA_HOME:-$HOME/.local/share}/vulkan/implicit_layer.d"
+
+install_layer() {
+	mkdir -p "$libdir" "$manifestdir"
+	# A running game keeps the old library mapped: replace the file, never write into it.
+	cp -f "$data/libVkLayer_presentmon.so" "$libdir/libVkLayer_presentmon.so.new"
+	mv -f "$libdir/libVkLayer_presentmon.so.new" "$libdir/libVkLayer_presentmon.so"
+	sed "s|@PML_LAYER_LIBRARY_PATH@|$libdir/libVkLayer_presentmon.so|" "$data/VkLayer_presentmon.json" \
+		> "$manifestdir/VkLayer_presentmon.json"
+	echo "installed $libdir/libVkLayer_presentmon.so"
+	echo "installed $manifestdir/VkLayer_presentmon.json"
+	echo "Start a game with PRESENTMON_LAYER=1 (Steam launch options: PRESENTMON_LAYER=1 %command%)."
+}
+
+remove_layer() {
+	rm -f "$libdir/libVkLayer_presentmon.so" "$manifestdir/VkLayer_presentmon.json"
+	echo "removed the layer and its manifest"
+}
+
+case "${1:-}" in
+--install-layer) install_layer; exit 0 ;;
+--remove-layer) remove_layer; exit 0 ;;
+--appimage-usage|--help-appimage) sed -n '3,10p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+presentmon) shift; exec "$here/usr/bin/presentmon" "$@" ;;
+esac
+case "$(basename "${ARGV0:-$0}")" in
+presentmon) exec "$here/usr/bin/presentmon" "$@" ;;
+esac
+exec "$here/usr/bin/presentmon-gui" "$@"

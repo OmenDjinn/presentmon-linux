@@ -1,0 +1,59 @@
+# Builds the AppImage (GUI, presentmon CLI, Vulkan layer) on Debian 13, so it runs on distributions with
+# glibc 2.41 or newer, and attaches it to the release when a version tag is pushed.
+name: AppImage
+
+on:
+  push:
+    tags: ['v*']
+    branches: [appimage]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    runs-on: ubuntu-latest
+    container: debian:trixie
+    steps:
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential cmake ninja-build git ca-certificates curl file pkg-config python3 \
+            libdrm-dev glslang-tools \
+            qt6-base-dev qt6-declarative-dev qt6-declarative-dev-tools qt6-svg-dev qt6-wayland \
+            libkirigami-dev libkf6globalaccel-dev kirigami-addons-dev \
+            qml6-module-qtquick qml6-module-qtquick-controls qml6-module-qtquick-layouts \
+            qml6-module-qtquick-templates qml6-module-qtquick-window qml6-module-qtqml-models \
+            qml6-module-qtcore qml6-module-qtqml-workerscript qml6-module-qt5compat-graphicaleffects \
+            qml6-module-org-kde-kirigami qml6-module-org-kde-desktop \
+            qml6-module-org-kde-kirigamiaddons-formcard
+      - uses: actions/checkout@v4
+      - name: Fetch submodules
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          git submodule update --init --depth 1
+          git -C third_party/pyrofling submodule update --init --recursive --depth 1 Granite
+      - name: Build
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+            -DPML_BUILD_TESTS=OFF -DPML_BUILD_TEST_APPS=OFF -DPML_BUILD_E2E=OFF
+          ninja -C build
+      - name: Fetch linuxdeploy
+        run: |
+          mkdir -p tools && cd tools
+          curl -fsSLO https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          curl -fsSLO https://github.com/linuxdeploy/linuxdeploy-plugin-qt/releases/download/continuous/linuxdeploy-plugin-qt-x86_64.AppImage
+          chmod +x *.AppImage
+      - name: Build the AppImage
+        run: LINUXDEPLOY_DIR="$PWD/tools" packaging/appimage/build.sh build out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PresentMon-AppImage
+          path: out/PresentMon-*.AppImage
+      - name: Attach to the release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/PresentMon-*.AppImage
